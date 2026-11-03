@@ -15,11 +15,14 @@ local util = require("lib.util")
 local config = require("lib.config")
 local category = require("lib.category")
 local UI = require("lib.ui")
+local Parcel = require("parcel")
 
 local Console = {}
 Console.__index = Console
 
-local PAGES = { { "status", "Status" }, { "screens", "Screens" }, { "storage", "Storage" }, { "settings", "Settings" }, { "log", "Log" } }
+local PAGES = { { "status", "Status" }, { "screens", "Screens" }, { "storage", "Storage" }, { "parcels", "Parcels" }, { "settings", "Settings" }, { "log", "Log" } }
+local KINDS = { "deposit", "withdraw" }
+local ONOFF = { "on", "off" }
 local REFRESH = 2
 local MSG_TIME = 8
 local CATS = { "block", "item", "resource", "unstackable" }
@@ -112,6 +115,8 @@ function Console:refresh()
   self.data.cfgBroken = cfg == nil
   self.data.cfg = cfg or self.data.cfg or config.defaultsFor(self.root)
   if not ping then self.data.peripherals = config.peripherals(self.data.cfg) end
+  self.data.parcels = Parcel.loadConfig(self.root)
+  self.data.pstats = Parcel.loadStats(self.root)
 end
 
 -- Saves the config and has the service apply it.
@@ -167,7 +172,7 @@ function Console:draw()
       self.form, self.picker = nil, nil
       self.ui.focus = nil
       if pg[1] == "log" then self.logOffset = 0 end
-    end, { bg = active and ui:col("blue", colors.black) or bar, fg = active and colors.white or ui:col("lightGray", colors.white) }) + 1
+    end, { bg = active and ui:col("blue", colors.black) or bar, fg = active and colors.white or ui:col("lightGray", colors.white) })
   end
   self.hint = ""
   local y1, y2 = 3, h - 1
@@ -177,6 +182,8 @@ function Console:draw()
     self:drawForm(y1, y2)
   elseif self.page == "screens" then
     self:drawScreens(y1, y2)
+  elseif self.page == "parcels" then
+    self:drawParcels(y1, y2)
   elseif self.page == "storage" then
     self:drawStorage(y1, y2)
   elseif self.page == "settings" then
@@ -343,6 +350,10 @@ function Console:drawForm(y1, y2)
     if fd.hint then ui:text(x, y, util.fit(fd.hint, w - x + 1), ui:col("lightGray", colors.white)) end
     y = y + 1
   end
+  for _, note in ipairs(form.notes or {}) do
+    ui:text(2, y, util.fit(note, w - 1), ui:col("lightGray", colors.white))
+    y = y + 1
+  end
   y = y + 1
   local x = ui:button(2, y, "Save", function() self:saveForm() end, { bg = ui:col("green", colors.black) }) + 1
   x = ui:button(x, y, "Cancel", function()
@@ -352,7 +363,123 @@ function Console:drawForm(y1, y2)
   if form.kind == "screen" and form.index then
     ui:button(x, y, "Remove screen", function() self:removeScreen(form.index) end, { bg = ui:col("red", colors.black) })
   end
-  self.hint = "Click a field, type. Tab: next. Esc: cancel."
+  for _, b in ipairs(form.extra or {}) do
+    x = ui:button(x, y, b[1], b[2], { bg = b[3] and ui:col(b[3], colors.black) or nil }) + 1
+  end
+  self.hint = form.hint or "Click a field, type. Tab: next. Esc: cancel."
+end
+
+-- Parcel Service --------------------------------------------------------
+
+local function ago(epochMs)
+  if not epochMs then return "never" end
+  local s = math.floor((os.epoch("utc") - epochMs) / 1000)
+  if s < 60 then return s .. "s ago" end
+  if s < 3600 then return math.floor(s / 60) .. "m ago" end
+  return math.floor(s / 3600) .. "h ago"
+end
+
+function Console:drawParcels(y1, y2)
+  local ui, w = self.ui, self.ui.w
+  local tasks = (self.data.parcels or {}).tasks or {}
+  local stats = self.data.pstats or {}
+  ui:text(1, y1, util.fit(" Name        Kind     Inventory           Last run", w), ui:col("yellow"))
+  local y = y1 + 1
+  if #tasks == 0 then ui:text(2, y, "No tasks yet. Add one below.", ui:col("lightGray", colors.white)) end
+  for i, t in ipairs(tasks) do
+    if y >= y2 - 1 then break end
+    local s = stats[t.id] or {}
+    local last = (t.enabled == false) and "off" or (ago(s.lastRun) .. (s.lastMoved and (" +" .. s.lastMoved) or ""))
+    local line = " " .. util.fit(tostring(t.name or t.id), 11) .. " " .. util.fit(t.kind or "?", 8) .. " " .. util.fit(tostring(t.inventory or ""), 19) .. " " .. last
+    local col = colors.white
+    if t.enabled == false then col = ui:col("lightGray", colors.white) elseif (s.errors or 0) > 0 and s.lastMoved == 0 and s.lastMessage then col = ui:col("orange", colors.white) end
+    ui:text(1, y, util.fit(line, w), col)
+    ui:region(1, y, w, y, function() self:openParcelForm(i) end)
+    y = y + 1
+  end
+  ui:button(2, y2, "Add task", function() self:openParcelForm(nil) end, { bg = ui:col("green", colors.black) })
+  self.hint = "Click a task to change, run or remove it."
+end
+
+function Console:openParcelForm(index)
+  local cfg = self.data.parcels
+  cfg.tasks = cfg.tasks or {}
+  local t = index and cfg.tasks[index] or { kind = "deposit", interval = 5, items = {} }
+  local s = (self.data.pstats or {})[t.id or ""] or {}
+  local form = {
+    kind = "parcel",
+    index = index,
+    title = index and ("Task " .. tostring(t.name or t.id)) or "New task",
+    fields = {
+      { label = "Name", key = "name", f = UI.newField(t.name, { max = 20 }), w = 18 },
+      { label = "Kind", key = "kind", cycle = KINDS, value = t.kind or "deposit", w = 10, hint = "into the vault / out of it" },
+      { label = "Inventory", key = "inventory", f = UI.newField(t.inventory, { max = 40 }), w = 26, pick = "inventory" },
+      { label = "Items", key = "items", f = UI.newField(Parcel.formatItems(t.kind or "deposit", t.items), { max = 200 }), w = 37 },
+      { label = "Every", key = "interval", f = UI.newField(t.interval or 5, { max = 6, filter = "%d" }), w = 6, hint = "seconds" },
+      { label = "Max/run", key = "maxPerRun", f = UI.newField(t.maxPerRun, { max = 7, filter = "%d" }), w = 7, hint = "items, blank: no cap" },
+      { label = "Total", key = "totalLimit", f = UI.newField(t.totalLimit, { max = 8, filter = "%d" }), w = 8, hint = "lifetime budget, blank: none" },
+      { label = "Enabled", key = "enabled", cycle = ONOFF, value = (t.enabled == false) and "off" or "on", w = 5 },
+    },
+    notes = {
+      "Items: deposit  name<limit   (all = everything)",
+      "       withdraw name=keep/perRun#total",
+    },
+  }
+  if index then
+    form.notes[#form.notes + 1] = string.format("Stats: %d runs, %d moved, %d errors, last %s%s", s.runs or 0, s.moved or 0, s.errors or 0, ago(s.lastRun), s.lastMessage and (": " .. s.lastMessage) or "")
+    form.extra = {
+      { "Remove", function()
+        table.remove(cfg.tasks, index)
+        Parcel.saveConfig(self.root, cfg)
+        self.form, self.ui.focus = nil, nil
+        self:say("Task removed")
+        self:refresh()
+      end, "red" },
+      { "Run now", function()
+        os.queueEvent("parcel_run", t.id)
+        self:say("Running " .. tostring(t.name or t.id))
+      end },
+      { "Reset stats", function()
+        os.queueEvent("parcel_reset", t.id)
+        self:say("Stats reset")
+      end },
+    }
+  end
+  self.form = form
+  self.ui.focus = form.fields[1].f
+end
+
+function Console:saveParcelForm()
+  local form = self.form
+  local cfg = self.data.parcels
+  local name, kind, inventory = self:formValue("name"), self:formValue("kind"), self:formValue("inventory")
+  if inventory == "" then
+    self:say("Pick the inventory the task works on", true)
+    return
+  end
+  local items, err = Parcel.parseItems(kind, self:formValue("items"))
+  if not items then
+    self:say(err, true)
+    return
+  end
+  if kind == "withdraw" and #items == 0 then
+    self:say("A withdraw task needs items: name=keep or name/perRun", true)
+    return
+  end
+  local old = form.index and cfg.tasks[form.index] or {}
+  local t = { id = old.id or Parcel.newId(cfg), name = name ~= "" and name or nil, kind = kind, inventory = inventory, items = items }
+  t.interval = tonumber(self:formValue("interval")) or 5
+  t.maxPerRun = tonumber(self:formValue("maxPerRun"))
+  t.totalLimit = tonumber(self:formValue("totalLimit"))
+  t.enabled = self:formValue("enabled") ~= "off"
+  if form.index then cfg.tasks[form.index] = t else cfg.tasks[#cfg.tasks + 1] = t end
+  if Parcel.saveConfig(self.root, cfg) then
+    self:say("Task " .. tostring(t.name or t.id) .. " saved and running")
+  else
+    self:say("Could not write " .. Parcel.configPath(self.root), true)
+  end
+  self.form, self.ui.focus = nil, nil
+  self:refresh()
 end
 
 function Console:formValue(key)
@@ -364,7 +491,9 @@ end
 function Console:saveForm()
   local form = self.form
   local cfg = self.data.cfg
-  if form.kind == "screen" then
+  if form.kind == "parcel" then
+    self:saveParcelForm()
+  elseif form.kind == "screen" then
     local name, chest, monitor = self:formValue("name"), self:formValue("chest"), self:formValue("monitor")
     if name == "" or chest == "" or monitor == "" then
       self:say("A screen needs a name, a chest and a monitor", true)

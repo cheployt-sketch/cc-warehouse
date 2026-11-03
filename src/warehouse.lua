@@ -612,6 +612,16 @@ local function runService()
   if cfg.rednet ~= false then service:startRednet() end
   service:applyScreens()
   runner:add("maintenance", function() maintenance(service) end)
+  -- The Parcel Service, as a task of this service (see parcel.lua).
+  if cfg.parcels ~= false then
+    runner:add("parcels", function()
+      sleep(0.5)
+      local wh = require("api")
+      local Parcel = require("parcel")
+      local vault = wh.connect({ mode = "local", probeTimeout = 3 })
+      Parcel.new({ vault = vault, root = ROOT, log = log.info }):run()
+    end)
+  end
   -- The control panel, drawn in this tab (the log still goes to its file).
   if cfg.console ~= false and term.isColor() then
     log.echo = false

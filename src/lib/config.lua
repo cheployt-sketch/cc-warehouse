@@ -33,6 +33,8 @@ C.defaults = {
   logLevel = "info",
   -- Show the control panel in the service's tab on this computer.
   console = true,
+  -- Run the Parcel Service (tasks in /warehouse/parcels) inside the service.
+  parcels = true,
 }
 
 local function copy(t)

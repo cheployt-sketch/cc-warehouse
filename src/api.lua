@@ -238,6 +238,9 @@ function Client:rescan(inventory) return must(self, "rescan", { inventory = inve
 function Client:rediscover() return must(self, "rediscover") end
 function Client:inventories() return must(self, "inventories") end
 function Client:peripherals() return must(self, "peripherals") end
+
+-- What inventory `name` holds: { items = { {slot, key, name, count} }, size, total }.
+function Client:inventory(name) return must(self, "inventory", { name = name }) end
 function Client:details(key) return must(self, "details", { key = key }) end
 function Client:config() return must(self, "config") end
 function Client:access() return must(self, "access") end

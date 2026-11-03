@@ -82,6 +82,21 @@ The warehouse computer's own screen shows a control panel: the service draws it 
 
 Everything is clicked; text fields take typing, Tab moves to the next field, Esc backs out. Every change is written to the config and applied to the running service at once, and the panel says what changed.
 
+## Parcel Service
+
+An app on the API that moves items by itself, task by task. The service hosts it (config `parcels = true`); `parcels` runs it on its own on any paired computer, `parcels list` shows the tasks. Tasks are edited on the panel's **Parcels** page (or in `/warehouse/parcels`), and changes apply at once.
+
+- **Deposit tasks** take items from an inventory into the vault: everything, or only the listed items. Each listed item can have a limit: once the vault holds that many, the task stops taking it (`minecraft:wheat<2000`).
+- **Withdraw tasks** send items from the vault to an inventory. Each item has a keep-level (top the inventory up to this many: `minecraft:coal=64`), a per-run cap (`/32`) and a lifetime budget (`#1000`); without a keep-level it sends the per-run amount every run. The container's free space is the last limit, and the message says when it was.
+- Every task has an interval, an optional cap per run and lifetime budget, and can be switched off. Several tasks may move the same items, each with its own stats: runs, items moved (per item too), errors, the last run and its message. `Run now` and `Reset stats` are on the task's form.
+
+```
+items: deposit   name<limit, name          (all = everything)
+       withdraw  name=keep/perRun#total
+```
+
+Apps can read any inventory on the network with `vault.inventory(name)`, which is what the Parcel Service uses.
+
 ## Changing the setup while it runs
 
 Nothing needs a restart. The service re-reads `/warehouse/config` within two seconds of it changing (a half-written file is ignored until it is complete) and applies the differences: screens are started, stopped or re-pointed at another chest or monitor, storage is discovered again, categories are recomputed, the hostname is re-registered, rednet can be switched on or off. Screens that stay keep what you were doing on them.

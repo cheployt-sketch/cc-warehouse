@@ -219,6 +219,7 @@ Service.help = {
   { "rediscover", "", "Pick up storage inventories attached or removed since start." },
   { "inventories", "", "The storage inventories and their fill." },
   { "peripherals", "", "Every inventory on the network with its role: storage, access, excluded or free." },
+  { "inventory", "name", "What one inventory on the network holds: items with slot, key and count, plus size." },
   { "details", "key", "Cached details of an item kind: displayName, maxCount, tags, ..." },
   { "subscribe", "ttl?", "Over rednet: receive change events for ttl seconds (default 60). Local apps get warehouse_event events anyway." },
   { "unsubscribe", "", "Stop receiving events." },
@@ -327,6 +328,21 @@ end
 function ops.inventories(self) return self.index:stats().inventories end
 
 function ops.peripherals(self) return config.peripherals(self.cfg) end
+
+-- What any inventory on the network holds right now (not only storage).
+function ops.inventory(self, a)
+  local name = needName(a, "name")
+  local ok, list = pcall(peripheral.call, name, "list")
+  if not ok or type(list) ~= "table" then error("cannot read " .. name .. ": " .. tostring(list), 0) end
+  local ok2, size = pcall(peripheral.call, name, "size")
+  local items, total = {}, 0
+  for slot, it in pairs(list) do
+    items[#items + 1] = { slot = slot, name = it.name, nbt = it.nbt, key = util.keyOf(it.name, it.nbt), count = it.count }
+    total = total + it.count
+  end
+  table.sort(items, function(x, y) return x.slot < y.slot end)
+  return { name = name, size = ok2 and size or nil, items = items, total = total, stacks = #items }
+end
 
 function ops.details(self, a)
   if type(a.key) ~= "string" then error("'key' must be an item key", 0) end
