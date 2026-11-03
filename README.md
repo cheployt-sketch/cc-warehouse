@@ -37,7 +37,13 @@ The warehouse computer must be able to reach an inventory to move items into or 
 
 ## Install
 
-Copy the `src` folder to the computer as `/warehouse` (with the cc-bridge: `cc_push src /warehouse`; or carry it on a floppy disk). Then on the computer:
+On a computer with HTTP enabled (the default), one line fetches everything into `/warehouse`:
+
+```
+wget run https://raw.githubusercontent.com/cheployt-sketch/cc-warehouse/main/src/install.lua
+```
+
+It downloads the files listed in `src/files.txt` (regenerate that list with `node test/manifest.cjs` after adding files) and leaves the config, key and data alone, so it also works as an update. Without HTTP, copy the `src` folder to the computer as `/warehouse` (with the cc-bridge: `cc_push src /warehouse`; or carry it on a floppy disk). Then on the computer:
 
 ```
 /warehouse/warehouse setup      answer the questions: storage types, access points, PINs

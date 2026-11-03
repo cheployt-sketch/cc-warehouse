@@ -5,6 +5,7 @@
   "description": "Deep storage service for CC:Tweaked: exact index, touch-screen access points, secure API for apps",
   "scripts": {
     "check": "node test/check.cjs",
-    "test": "node test/check.cjs && node test/run.cjs"
+    "test": "node test/manifest.cjs && node test/check.cjs && node test/run.cjs",
+    "manifest": "node test/manifest.cjs"
   }
 }

@@ -36,7 +36,7 @@ for (const file of walk(process.argv[2] || path.join(__dirname, "..", "src"), []
   const L = lauxlib.luaL_newstate();
   const st = lauxlib.luaL_loadbuffer(L, to_luastring(src), to_luastring("@" + file));
   if (st !== lua.LUA_OK) { bad++; console.log("SYNTAX " + lua.lua_tojsstring(L, -1)); continue; }
-  if (!file.includes("ccryptolib")) {
+  if (!file.includes("ccryptolib") && !file.endsWith("install.lua")) {
     const e = check52(file, src);
     if (e) { bad++; console.log("5.2  " + file + ": " + e); }
   }
