@@ -347,6 +347,7 @@ function Console:drawForm(y1, y2)
     end
     local x = 13 + fd.w + 1
     if fd.pick then x = ui:button(x, y, "Pick", function() self:openPicker(fd) end) + 1 end
+    if fd.fill then x = ui:button(x, y, "Fill", function() self:fillItems(fd) end) + 1 end
     if fd.hint then ui:text(x, y, util.fit(fd.hint, w - x + 1), ui:col("lightGray", colors.white)) end
     y = y + 1
   end
@@ -414,7 +415,7 @@ function Console:openParcelForm(index)
       { label = "Name", key = "name", f = UI.newField(t.name, { max = 20 }), w = 18 },
       { label = "Kind", key = "kind", cycle = KINDS, value = t.kind or "deposit", w = 10, hint = "into the vault / out of it" },
       { label = "Inventory", key = "inventory", f = UI.newField(t.inventory, { max = 40 }), w = 26, pick = "inventory" },
-      { label = "Items", key = "items", f = UI.newField(Parcel.formatItems(t.kind or "deposit", t.items), { max = 200 }), w = 37 },
+      { label = "Items", key = "items", f = UI.newField(Parcel.formatItems(t.kind or "deposit", t.items), { max = 400 }), w = 30, fill = true },
       { label = "Every", key = "interval", f = UI.newField(t.interval or 5, { max = 6, filter = "%d" }), w = 6, hint = "seconds" },
       { label = "Max/run", key = "maxPerRun", f = UI.newField(t.maxPerRun, { max = 7, filter = "%d" }), w = 7, hint = "items, blank: no cap" },
       { label = "Total", key = "totalLimit", f = UI.newField(t.totalLimit, { max = 8, filter = "%d" }), w = 8, hint = "lifetime budget, blank: none" },
@@ -447,6 +448,50 @@ function Console:openParcelForm(index)
   end
   self.form = form
   self.ui.focus = form.fields[1].f
+end
+
+-- Fill: puts what the chosen inventory holds on the Items line (deposit:
+-- the names; withdraw: name=count, keeping what is there now).
+function Console:fillItems(fd)
+  local inventory = self:formValue("inventory")
+  if inventory == "" then
+    self:say("Pick the inventory first", true)
+    return
+  end
+  local kind = self:formValue("kind")
+  local inv, err = self:ask("inventory", { name = inventory })
+  if not inv then
+    local ok, list = pcall(peripheral.call, inventory, "list")
+    if not ok or type(list) ~= "table" then
+      self:say("Cannot read " .. inventory .. ": " .. tostring(err or list), true)
+      return
+    end
+    inv = { items = {} }
+    for slot, it in pairs(list) do inv.items[#inv.items + 1] = { name = it.name, count = it.count, slot = slot } end
+  end
+  local counts, order = {}, {}
+  for _, it in ipairs(inv.items) do
+    if not counts[it.name] then order[#order + 1] = it.name end
+    counts[it.name] = (counts[it.name] or 0) + it.count
+  end
+  local present = {}
+  for _, spec in ipairs(Parcel.parseItems(kind, fd.f.text) or {}) do present[spec.item] = true end
+  local added = {}
+  for _, name in ipairs(order) do
+    if not present[name] then
+      added[#added + 1] = kind == "withdraw" and (name .. "=" .. counts[name]) or name
+    end
+  end
+  if #added == 0 then
+    self:say(#order == 0 and (inventory .. " is empty") or "Everything in it is already on the line")
+    return
+  end
+  local text = trim(fd.f.text)
+  if text == "all" or text == "*" then text = "" end
+  fd.f.text = (text ~= "" and (text .. ",") or "") .. table.concat(added, ",")
+  fd.f.cursor = #fd.f.text + 1
+  self.ui.focus = fd.f
+  self:say("Added " .. #added .. " item(s) from " .. inventory)
 end
 
 function Console:saveParcelForm()
