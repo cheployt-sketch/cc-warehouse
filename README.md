@@ -43,7 +43,7 @@ On a computer with HTTP enabled (the default), one line fetches everything into 
 wget run https://raw.githubusercontent.com/cheployt-sketch/cc-warehouse/main/src/install.lua
 ```
 
-It downloads the files listed in `src/files.txt` (regenerate that list with `node test/manifest.cjs` after adding files) and leaves the config, key and data alone, so it also works as an update. Without HTTP, copy the `src` folder to the computer as `/warehouse` (with the cc-bridge: `cc_push src /warehouse`; or carry it on a floppy disk). Then on the computer:
+It downloads the files listed in `src/files.txt` (regenerate that list with `node test/manifest.cjs` after adding files) and leaves the config, key and data alone, so it also works as an update. The same line with `crafter` after the URL installs the same files and then explains the crafter's steps (on a turtle: pairing and `crafter worker`), and with `client` it explains pairing an app computer; on a turtle `crafter` is the default. Without HTTP, copy the `src` folder to the computer as `/warehouse` (with the cc-bridge: `cc_push src /warehouse`; or carry it on a floppy disk). Then on the computer:
 
 ```
 /warehouse/warehouse setup      answer the questions: storage types, access points, PINs
@@ -116,7 +116,7 @@ Automated crafting from the vault. `crafter` runs on the warehouse computer next
 
 ### Install
 
-On the warehouse computer (the service must run there):
+On the warehouse computer (the service must run there; `wget run https://raw.githubusercontent.com/cheployt-sketch/cc-warehouse/main/src/install.lua crafter` puts the files there if they are missing):
 
 ```
 crafter setup turtle=turtle_2 input=minecraft:chest_20 recipeChest=minecraft:chest_19 monitor=right
@@ -126,7 +126,7 @@ crafter               start now, in a tab of its own with its panel
 
 `crafter setup` alone shows the settings (`turtle`, `input`, `output`, `recipeChest`, `smeltIn`, `smeltOut`, `monitor`, `scale`, `smeltStall`); the panel's Setup page has pickers for them. The turtle can be named by its name on the network (`turtle_2`: then the crafter can switch it on too) or by its ID.
 
-On the turtle: put the warehouse folder there (`wget run ...install.lua`, or copy it), pair it with a floppy (`warehouse key disk` on the warehouse computer, `wh pair disk` on the turtle), then `crafter worker`. `crafter worker bottom` takes from and drops into the chest below, `crafter worker top bottom` takes from the chest above and drops into the one below; the default is the chest in front for both. The turtle only reaches the chest right in front of, above or below it, and that chest must also be on the warehouse's wired network (a wired modem on it), because the crafter fills it from the vault: a chest the turtle merely sees over the network is no use to it. A startup file with `shell.run("/warehouse/crafter.lua", "worker")` keeps it going.
+On the turtle: put the warehouse folder there (`wget run https://raw.githubusercontent.com/cheployt-sketch/cc-warehouse/main/src/install.lua crafter`, or copy it), pair it with a floppy (`warehouse key disk` on the warehouse computer, `wh pair disk` on the turtle), then `crafter worker`. `crafter worker bottom` takes from and drops into the chest below, `crafter worker top bottom` takes from the chest above and drops into the one below; the default is the chest in front for both. The turtle only reaches the chest right in front of, above or below it, and that chest must also be on the warehouse's wired network (a wired modem on it), because the crafter fills it from the vault: a chest the turtle merely sees over the network is no use to it. A startup file with `shell.run("/warehouse/crafter.lua", "worker")` keeps it going.
 
 ### Recipes
 
