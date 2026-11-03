@@ -147,8 +147,14 @@ function P:saveStats()
   util.writeTable(P.statsPath(self.root), self.stats)
 end
 
+-- Does a stack match an item spec? Exact key or id, or the id without its
+-- namespace, or a display-name-like spelling ("Oak Planks" = oak_planks).
+local function norm(s) return tostring(s):lower():gsub("[%s%-]+", "_") end
 local function matches(spec, it)
-  return spec.item == it.key or spec.item == it.name
+  if spec.item == it.key or spec.item == it.name then return true end
+  local want = norm(spec.item)
+  if want:find(":", 1, true) then return want == it.name:lower() end
+  return want == util.shortName(it.name):lower()
 end
 
 -- Runs one task now. Returns the number moved and a message.
@@ -176,7 +182,8 @@ function P:runTask(t)
         for _, spec in ipairs(t.items) do
           if matches(spec, it) then
             local allowed = budget - moved
-            if spec.limit then allowed = math.min(allowed, spec.limit - v.count(spec.item)) end
+            -- the vault's count of exactly this stack's kind
+            if spec.limit then allowed = math.min(allowed, spec.limit - v.count(it.key)) end
             if allowed > 0 then
               local n, _, msg = v.deposit(t.inventory, { slot = it.slot, count = math.min(allowed, it.count) })
               tally(it.key, n)
@@ -191,15 +198,14 @@ function P:runTask(t)
     end
   else
     local inv = v.inventory(t.inventory)
-    local have = {}
-    for _, it in ipairs(inv.items) do
-      have[it.key] = (have[it.key] or 0) + it.count
-      have[it.name] = (have[it.name] or 0) + it.count
-    end
     for _, spec in ipairs(t.items) do
       if budget - moved <= 0 then break end
+      local have = 0
+      for _, it in ipairs(inv.items) do
+        if matches(spec, it) then have = have + it.count end
+      end
       local want
-      if spec.keep then want = spec.keep - (have[spec.item] or 0) else want = spec.perRun or 0 end
+      if spec.keep then want = spec.keep - have else want = spec.perRun or 0 end
       if spec.perRun then want = math.min(want, spec.perRun) end
       if spec.total then want = math.min(want, spec.total - (st.items[spec.item] or 0)) end
       want = math.min(want, budget - moved)

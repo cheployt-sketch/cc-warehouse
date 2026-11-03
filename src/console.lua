@@ -422,8 +422,8 @@ function Console:openParcelForm(index)
       { label = "Enabled", key = "enabled", cycle = ONOFF, value = (t.enabled == false) and "off" or "on", w = 5 },
     },
     notes = {
-      "Items: deposit  name<limit   (all = everything)",
-      "       withdraw name=keep/perRun#total",
+      "Items: deposit  oak_planks<64   (all = everything)",
+      "       withdraw minecraft:coal=64/32#1000",
     },
   }
   if index then
