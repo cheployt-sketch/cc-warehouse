@@ -103,6 +103,55 @@ items: deposit   name<limit, name          (all = everything)
 
 Apps can read any inventory on the network with `vault.inventory(name)`, which is what the Parcel Service uses.
 
+## Crafter
+
+Automated crafting from the vault. `crafter` runs on the warehouse computer next to the service and makes things with a crafty turtle and your furnaces: every ingredient comes out of the vault and every result goes back in, so a recipe with several steps (logs to planks, planks to sticks, sticks and diamonds to a pickaxe) is one job, and whatever a step makes too many of is simply stored. Recipes are laid out in a chest and scanned, edited on the computer's panel while it runs, watched and run from a monitor dashboard, and ordered from the Control Panel (the Crafter app in cc-control-panel).
+
+### Hardware
+
+- **A crafty turtle** (a turtle with a crafting table) with a wired modem on the warehouse's network, and a chest on the network in front of it (or above or below): the turtle takes its ingredients from that chest and drops what it crafted into it (or into a second chest, `output`). It never moves and needs no fuel.
+- **A recipe chest** on the network, where you lay recipes out.
+- **For smelting:** a chest hoppers take from, in front of your furnaces (`smeltIn`), and a chest hoppers fill with what comes out (`smeltOut`). Fuel is your furnace line's business; a Parcel withdraw task keeps a fuel chest topped up.
+- **A monitor** for the dashboard, if you like. The crafter never takes an access point's monitor: one named in its setup is refused when an access point uses it, and without a name it takes the first monitor no access point has.
+
+### Install
+
+On the warehouse computer (the service must run there):
+
+```
+crafter setup turtle=turtle_2 input=minecraft:chest_20 recipeChest=minecraft:chest_19 monitor=right
+crafter startup       start on every boot (the file is /startup/crafter.lua)
+crafter               start now, in a tab of its own with its panel
+```
+
+`crafter setup` alone shows the settings (`turtle`, `input`, `output`, `recipeChest`, `smeltIn`, `smeltOut`, `monitor`, `scale`, `smeltStall`); the panel's Setup page has pickers for them. The turtle can be named by its name on the network (`turtle_2`: then the crafter can switch it on too) or by its ID.
+
+On the turtle: put the warehouse folder there (`wget run ...install.lua`, or copy it), pair it with a floppy (`warehouse key disk` on the warehouse computer, `wh pair disk` on the turtle), then `crafter worker`. `crafter worker bottom` takes from and drops into the chest below, `crafter worker top bottom` takes from the chest above and drops into the one below; the default is the chest in front for both. The turtle only reaches the chest right in front of, above or below it, and that chest must also be on the warehouse's wired network (a wired modem on it), because the crafter fills it from the vault: a chest the turtle merely sees over the network is no use to it. A startup file with `shell.run("/warehouse/crafter.lua", "worker")` keeps it going.
+
+### Recipes
+
+Lay a step out in the recipe chest the way it goes in a crafting table: the chest's top left 3x3 is the grid (slots 1-3, 10-12 and 19-21), one item per cell, as many as you like of it. Put the result in the top right slot (9) if you have one, with the count one craft gives; otherwise the crafter learns it by crafting once. On the panel, **New recipe**, **Scan craft**, a name, **Save**; or `crafter add Planks` from the shell. A smelting step is laid out the same way with the item to smelt anywhere in the grid: **Scan smelt** (or `crafter add Ingots smelt`). A recipe with several steps: lay the next step out and scan again; steps run in order, and the ^ v x buttons reorder or remove them. A step without a result is learned as soon as the recipe is saved: one craft, or one smelted item, with ingredients from the vault or, failing that, from the recipe chest itself (wherever they lie in it by then).
+
+### Running
+
+- **Run** makes the recipe `count` times (the Run x field); **Order** makes that many of the final item. Orders queue up.
+- **Mode always** makes round after round for as long as there are ingredients; **rate** makes `rateCount` items every `rateSeconds` (a period it is still busy with counts as "behind", it is not piled up); **off** only does what you order.
+- **Stop** drops the orders, the run and the mode.
+
+An order is planned backwards from the final item: each earlier step makes only what the later ones need and the vault does not already hold, so a recipe that starts from logs uses the planks and sticks you have before making more. The crafter takes turns between recipes, one turtle round (up to a stack of crafts) at a time, so an always-on recipe never blocks an order. A recipe's state says what it is doing (`step 2/3: crafting 12/64`, `smelting 20/64`, `waiting for Diamond`, `turtle #15 did not answer`, `turtle #15 has no chest on its front side`); an ingredient that runs out makes it wait, not fail. A craft the turtle cannot do (a layout that is no recipe) is a *problem*: the recipe stops with the message until you edit it or order again.
+
+Smelting: the inputs go into the smelter's input chest, and whatever lands in the finish chest is stored every few seconds, whether a smelt is running or not; what the running step is waiting for is counted as it comes. A smelter that gives nothing for `smeltStall` seconds (300) is reported as stalled, and the step goes on as soon as something comes out.
+
+### Where it shows
+
+- **The panel on the computer** (the crafter's tab): Recipes (every recipe; click one to change, run, order or stop it), Setup, Log.
+- **The dashboard** on the monitor: every recipe and what it is doing; tap one for its stats and Run, Order (a number pad), Always and Stop.
+- **The Control Panel** (cc-control-panel's Crafter app): the same from the pocket computer.
+- **The shell**: `crafter status`, `crafter list`, `crafter scan`, `crafter add <name> [smelt]`, `crafter order <recipe> <n>`, `crafter run <recipe> [times]`, `crafter stop <recipe>`, `crafter set <recipe> mode=always|rate|off count= rateCount= rateSeconds= name=`, `crafter quit`.
+- **Apps on the same computer** can ask it the same things: a `crafter_request` event carrying `{ id, op, args }` (ops `status`, `list`, `recipe`, `add`, `scan`, `order`, `run`, `stop`, `set`, `shutdown`) is answered with a `crafter_reply` event `{ id, ok, result or error }`. That is how the Control Panel app reaches it.
+
+Its files are in `/warehouse/data/crafter/`: `config`, `recipes`, `state` (orders in progress and stats, so a reboot carries on where it was) and `log`.
+
 ## Changing the setup while it runs
 
 Nothing needs a restart. The service re-reads `/warehouse/config` within two seconds of it changing (a half-written file is ignored until it is complete) and applies the differences: screens are started, stopped or re-pointed at another chest or monitor, storage is discovered again, categories are recomputed, the hostname is re-registered, rednet can be switched on or off. Screens that stay keep what you were doing on them.
@@ -232,11 +281,13 @@ src/lib/secure.lua    sealed messages, keys
 src/lib/access.lua    access point screens
 src/lib/ui.lua        monitor drawing and tap targets
 src/lib/config.lua    config file and inventory roles
+src/crafter.lua       the crafter: automated crafting from the vault
+src/craft/            its model (recipes), scheduler (engine), turtle line (link), the turtle's side (worker), dashboard (screen) and panel (console)
 src/examples/         sink, stock, watch
 src/ccryptolib/       ChaCha20-Poly1305, BLAKE3, random (vendored)
 ```
 
 ## Testing
 
-- `node test/check.cjs` compiles every file with Fengari and flags Lua 5.3-only syntax (CC:Tweaked runs Lua 5.2). `node test/run.cjs` runs `test/sim.lua`: the index logic against simulated inventories that behave like CC's (slot-order inserts, stack sizes, drift). Fengari is taken from the sibling `cc-control-panel/node_modules`.
-- In game, the service accepts two test hooks from programs on the warehouse computer only: `debug.screen` (`{ access = name_or_number }`) returns the text of an access point's monitor, and `debug.touch` (`{ access, x, y }`) taps it. With them a script can drive the screens without standing at the monitor; `vault.try("debug.touch", { x = 5, y = 3 })` from the client library does it.
+- `node test/check.cjs` compiles every file with Fengari and flags Lua 5.3-only syntax (CC:Tweaked runs Lua 5.2). `node test/run.cjs` runs `test/sim.lua`, the index logic against simulated inventories that behave like CC's (slot-order inserts, stack sizes, drift), and `test/crafter.lua`, the crafter against a simulated vault, turtle and smelter (orders over several steps, always and rate modes, smelting, learning, a turtle that goes away, reboots). `node test/run.cjs crafter` runs just the one. Fengari is taken from the sibling `cc-control-panel/node_modules`.
+- The crafter answers `debug.screen`, `debug.touch`, `debug.console` and `debug.click` the same way over its `crafter_request` events. In game, the service accepts two test hooks from programs on the warehouse computer only: `debug.screen` (`{ access = name_or_number }`) returns the text of an access point's monitor, and `debug.touch` (`{ access, x, y }`) taps it. With them a script can drive the screens without standing at the monitor; `vault.try("debug.touch", { x = 5, y = 3 })` from the client library does it.

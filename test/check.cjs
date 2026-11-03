@@ -9,7 +9,7 @@ function check52(file, src) {
   const code = src
     .replace(/--\[(=*)\[[\s\S]*?\]\1\]/g, "")
     .replace(/\[(=*)\[[\s\S]*?\]\1\]/g, '""')
-    .replace(/"(?:[^"\\n]|\.)*"|'(?:[^'\\n]|\.)*'/g, '""')
+    .replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, '""')
     .replace(/--[^\n]*/g, "");
   const bad = code.match(/\/\/|<<|>>|[&|]|~(?!=)/);
   if (bad) return `'${bad[0]}' is Lua 5.3 syntax`;

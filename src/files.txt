@@ -13,6 +13,13 @@ ccryptolib/random.lua
 ccryptolib/SOURCE
 ccryptolib/util.lua
 console.lua
+craft/console.lua
+craft/engine.lua
+craft/link.lua
+craft/recipes.lua
+craft/screen.lua
+craft/worker.lua
+crafter.lua
 examples/sink.lua
 examples/stock.lua
 examples/watch.lua
