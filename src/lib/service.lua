@@ -10,27 +10,120 @@
 local util = require("lib.util")
 local config = require("lib.config")
 local VERSION = require("lib.version")
+local Access = require("lib.access")
+local transport = require("lib.transport")
+local secure = require("lib.secure")
 
 local Service = {}
 Service.__index = Service
 
--- opts: index, cfg, log, root
+-- opts: index, cfg, log, root, runner (lib.runner, which runs the screens
+-- and transports), key (the warehouse key, for rednet).
 function Service.new(opts)
   local self = setmetatable({}, Service)
   self.index = opts.index
   self.cfg = opts.cfg
   self.log = opts.log
   self.root = opts.root
+  self.runner = opts.runner
+  self.key = opts.key
   self.queue = {}
   self.subscribers = {} -- computer ID -> os.clock() when the subscription ends
   self.started = os.clock()
-  self.access = {} -- access points, by number and by name
+  self.screens = {} -- the running access points (lib.access objects)
+  self.screenSeq = 0
+  self.access = {} -- screens by position in the config and by name
   self.sendEvent = nil -- set by the rednet transport: function(id, event)
   self.stopping = false
+  self.configSeen = config.modified(self.root)
   self.index.onChange = function(changes)
     self:emit({ type = "change", items = changes, version = self.index.version })
   end
   return self
+end
+
+-- Screens run as tasks of the runner, so they can start and stop while the
+-- service runs.
+function Service:addScreen(apCfg)
+  self.screenSeq = self.screenSeq + 1
+  local ap = Access.new(self, apCfg, self.cfg)
+  ap.id = self.screenSeq
+  self.screens[#self.screens + 1] = ap
+  self.runner:add("screen:" .. ap.id, function() ap:run() end)
+  return ap
+end
+
+function Service:removeScreen(ap)
+  ap:stop()
+  self.runner:remove("screen:" .. ap.id)
+  for i, s in ipairs(self.screens) do
+    if s == ap then
+      table.remove(self.screens, i)
+      break
+    end
+  end
+end
+
+function Service:indexScreens()
+  self.access = {}
+  for i, apCfg in ipairs(self.cfg.access or {}) do
+    for _, ap in ipairs(self.screens) do
+      if ap.cfg == apCfg then
+        self.access[i] = ap
+        if apCfg.name then self.access[apCfg.name] = ap end
+      end
+    end
+  end
+end
+
+-- Makes the running screens match cfg.access: existing ones are matched by
+-- name, then by monitor, and given their new settings; the rest are started
+-- or stopped. Returns the names added, changed and removed.
+function Service:applyScreens()
+  local leftover = { table.unpack(self.screens) }
+  local function take(pred)
+    for i, ap in ipairs(leftover) do
+      if pred(ap) then
+        table.remove(leftover, i)
+        return ap
+      end
+    end
+  end
+  local added, updated, removed = {}, {}, {}
+  for _, apCfg in ipairs(self.cfg.access or {}) do
+    local ap = take(function(s) return s.cfg.name ~= nil and s.cfg.name == apCfg.name end)
+      or take(function(s) return s.cfg.monitor == apCfg.monitor end)
+    if ap then
+      if ap:reconfigure(apCfg, self.cfg) then updated[#updated + 1] = ap.name end
+    else
+      ap = self:addScreen(apCfg)
+      added[#added + 1] = ap.name
+    end
+  end
+  for _, ap in ipairs(leftover) do
+    removed[#removed + 1] = ap.name
+    self:removeScreen(ap)
+  end
+  self:indexScreens()
+  return added, updated, removed
+end
+
+function Service:startRednet()
+  if not self.key or not self.runner or self.runner:has("rednet") then return end
+  local service = self
+  self.runner:add("rednet", function() transport.runRednet(service, service.key) end)
+end
+
+function Service:stopRednet()
+  if self.runner then self.runner:remove("rednet") end
+  self.sendEvent = nil
+  pcall(rednet.unhost, secure.PROTOCOL)
+end
+
+function Service:rehost()
+  pcall(rednet.unhost, secure.PROTOCOL)
+  local ok, err = pcall(rednet.host, secure.PROTOCOL, self.cfg.hostname or "vault")
+  if not ok then self.log.warn("rednet.host failed: " .. tostring(err)) end
 end
 
 -- Tells every listener about something that happened: local apps get a
@@ -132,6 +225,7 @@ Service.help = {
   { "config", "", "Presets, hostname, storage rules and access points (no PINs)." },
   { "access", "", "The access points and whether their screens are up." },
   { "help", "", "This list." },
+  { "reload", "", "Read the config file again and apply it: screens, storage, categories, hostname, rednet." },
   { "shutdown", "", "Stop the service (local requests only)." },
 }
 
@@ -269,6 +363,33 @@ function ops.access(self)
     out[i] = { name = ap.name, chest = ap.chest, monitor = ap.monitor, up = live and live.ok or false, locked = live and live:isLocked() or false }
   end
   return out
+end
+
+-- Applies the config file to the running service. Screens keep their
+-- state; only what changed is touched.
+function ops.reload(self)
+  local cfg, err = config.load(self.root)
+  self.configSeen = config.modified(self.root)
+  if not cfg then error(err, 0) end
+  local old = self.cfg
+  self.cfg = cfg
+  for _, ap in ipairs(self.screens) do ap.global = cfg end
+  if cfg.logLevel ~= old.logLevel and self.log.setLevel then self.log.setLevel(cfg.logLevel) end
+  self.index:reclassify(cfg.categories or {})
+  local storage = ops.rediscover(self)
+  local added, updated, removed = self:applyScreens()
+  local notes = {}
+  local wasOn, isOn = old.rednet ~= false, cfg.rednet ~= false
+  if wasOn ~= isOn then
+    if isOn then self:startRednet() else self:stopRednet() end
+    notes[#notes + 1] = "rednet " .. (isOn and "on" or "off")
+  elseif isOn and cfg.hostname ~= old.hostname then
+    self:rehost()
+    notes[#notes + 1] = "hostname " .. tostring(cfg.hostname)
+  end
+  self.log.info(string.format("config applied: %d screen(s) (%d added, %d changed, %d removed), storage %d added, %d removed%s",
+    #self.screens, #added, #updated, #removed, #storage.added, #storage.removed, #notes > 0 and ("; " .. table.concat(notes, ", ")) or ""))
+  return { storage = storage, screens = { added = added, updated = updated, removed = removed }, notes = notes }
 end
 
 function ops.shutdown(self, a, req)

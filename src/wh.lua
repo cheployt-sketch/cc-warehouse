@@ -22,7 +22,7 @@ local function usage()
   print("wh get <item> <n> <to> [slot]")
   print("wh put <from> [slot]")
   print("wh move <from> <slot> <to> [slot] [n]")
-  print("wh compact, rescan [inv], peripherals, help, watch, stop")
+  print("wh compact, rescan [inv], peripherals, help, watch, reload, stop")
   print("wh pair <key>, pair disk, unpair   (other computers)")
 end
 
@@ -121,6 +121,10 @@ local function run()
         end
       end
     end
+  elseif cmd == "reload" then
+    local r = vault.reload()
+    print(string.format("applied: screens +%d, %d changed, -%d; storage +%d -%d%s", #r.screens.added, #r.screens.updated, #r.screens.removed,
+      #r.storage.added, #r.storage.removed, #r.notes > 0 and (" (" .. table.concat(r.notes, ", ") .. ")") or ""))
   elseif cmd == "stop" then
     vault.shutdown()
     print("Stopping the service.")

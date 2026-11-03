@@ -591,8 +591,46 @@ function Access:screenLines()
   return self.ui:lines()
 end
 
+-- Takes over new settings without a restart. Returns true when anything
+-- changed. A new monitor or text scale makes the loop attach again.
+function Access:reconfigure(cfg, global)
+  local old = self.cfg
+  self.cfg = cfg
+  self.global = global or self.global
+  self.name = cfg.name or cfg.monitor
+  local changed = false
+  for _, k in ipairs({ "name", "chest", "monitor", "scale", "pin", "lockAfter" }) do
+    if cfg[k] ~= old[k] then changed = true end
+  end
+  if cfg.monitor ~= old.monitor then
+    if self.mon then pcall(self.mon.clear) end
+    self.mon, self.ui = nil, nil
+    self.ok = false
+  elseif tonumber(cfg.scale) ~= tonumber(old.scale) then
+    self.ok = false
+  end
+  if cfg.chest ~= old.chest then self.chestSig = nil end
+  if tostring(cfg.pin or "") ~= tostring(old.pin or "") then
+    self.unlockedUntil = 0
+    self.pinEntry = ""
+  end
+  self.drawnVersion = -1
+  os.queueEvent("warehouse_reload")
+  return changed
+end
+
+-- Ends this screen for good: the service stops running it.
+function Access:stop()
+  self.stopped = true
+  self.ok = false
+  if self.mon then
+    pcall(self.mon.setBackgroundColor, colors.black)
+    pcall(self.mon.clear)
+  end
+end
+
 function Access:run()
-  while true do
+  while not self.stopped do
     local ok, err = self:attach()
     if ok then
       self:loop()
@@ -632,7 +670,7 @@ function Access:loop()
   self:refreshChest()
   self:draw()
   self:armPoll()
-  while self.ok do
+  while self.ok and not self.stopped do
     local ev = { os.pullEvent() }
     local e = ev[1]
     if e == "monitor_touch" and ev[2] == self.cfg.monitor then

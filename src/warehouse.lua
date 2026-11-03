@@ -4,10 +4,17 @@
 --   warehouse              start (moves itself to a background tab)
 --   warehouse startup      start on every boot, and put wh/warehouse on the path
 --   warehouse setup        configure storage, screens and security, step by step
+--   warehouse access ...   list, add, change or remove screens while it runs
+--   warehouse storage ...  change what counts as storage while it runs
+--   warehouse set ...      change presets, lock time, hostname, categories, ...
+--   warehouse reload       apply a config file you edited by hand
 --   warehouse key          show the key other computers pair with (key new / key disk)
 --   warehouse status       what the running service holds
 --   warehouse stop         stop the running service
 --   warehouse log          show the end of the log
+--
+-- Every change is applied to the running service at once; the service also
+-- notices edits to its config file by itself.
 
 local args = { ... }
 local programPath = "/" .. shell.getRunningProgram()
@@ -19,6 +26,7 @@ package.path = ROOT .. "/?.lua;" .. package.path
 
 local util = require("lib.util")
 local config = require("lib.config")
+local category = require("lib.category")
 local log = require("lib.log")
 local VERSION = require("lib.version")
 
@@ -30,19 +38,27 @@ local function usage()
   print("  " .. NAME .. "            start the service")
   print("  " .. NAME .. " startup    start on every boot")
   print("  " .. NAME .. " setup      configure storage, screens and security")
+  print("  " .. NAME .. " access     list/add/set/remove screens (live)")
+  print("  " .. NAME .. " storage    change what counts as storage (live)")
+  print("  " .. NAME .. " set        presets, lock time, hostname, ... (live)")
+  print("  " .. NAME .. " reload     apply a hand-edited config")
   print("  " .. NAME .. " key        show the pairing key (key new, key disk)")
   print("  " .. NAME .. " status     what the service holds")
   print("  " .. NAME .. " stop       stop the service")
   print("  " .. NAME .. " log        show the log")
 end
 
-local function client()
+-- The running service on this computer, or nil (quietly).
+local function quietClient()
   local wh = require("api")
-  local ok, vault = pcall(wh.connect, { mode = "local", probeTimeout = 2 })
-  if not ok then
-    printError("The service is not running here. Start it with '" .. NAME .. "'.")
-    return nil
-  end
+  local ok, vault = pcall(wh.connect, { mode = "local", probeTimeout = 1 })
+  if ok then return vault end
+  return nil
+end
+
+local function client()
+  local vault = quietClient()
+  if not vault then printError("The service is not running here. Start it with '" .. NAME .. "'.") end
   return vault
 end
 
@@ -58,9 +74,230 @@ local function newKey()
   return key
 end
 
--- Setup wizard helpers. The computer's screen cannot scroll back, so every
--- step gets a fresh screen with just what that step needs, and long lists
--- pause before they run off the top.
+-- Config editing -------------------------------------------------------
+
+local LISTS = { presets = "number", stackPresets = "number", types = "string", names = "string", exclude = "string" }
+local STRINGS = { pin = true, name = true, hostname = true, chest = true, monitor = true, logLevel = true }
+
+-- A value typed on the command line, as the config wants it. "" or "-"
+-- clears a setting.
+local function parseValue(key, v)
+  if v == nil or v == "" or v == "-" then return nil end
+  if v == "true" then return true end
+  if v == "false" then return false end
+  if LISTS[key] then
+    local out = {}
+    for s in v:gmatch("[^,%s]+") do out[#out + 1] = LISTS[key] == "number" and (tonumber(s) or s) or s end
+    return out
+  end
+  if STRINGS[key] then return v end
+  return tonumber(v) or v
+end
+
+-- Applies key=value words from list[from..] to target.
+local function assignments(list, from, target, allowed)
+  for i = from, #list do
+    local k, v = list[i]:match("^([%w_]+)=(.*)$")
+    if not k then return nil, "expected key=value, got " .. list[i] end
+    if allowed and not allowed[k] then return nil, "unknown setting: " .. k end
+    target[k] = parseValue(k, v)
+  end
+  return true
+end
+
+local function loadForEdit()
+  local cfg, err = config.load(ROOT)
+  if not cfg then
+    printError(err .. ". Fix or delete the file first.")
+    return nil
+  end
+  return cfg
+end
+
+local function describeApplied(res)
+  local parts = {}
+  for _, n in ipairs(res.screens.added) do parts[#parts + 1] = "screen " .. tostring(n) .. " added" end
+  for _, n in ipairs(res.screens.updated) do parts[#parts + 1] = "screen " .. tostring(n) .. " changed" end
+  for _, n in ipairs(res.screens.removed) do parts[#parts + 1] = "screen " .. tostring(n) .. " removed" end
+  for _, n in ipairs(res.storage.added) do parts[#parts + 1] = "storage +" .. n end
+  for _, n in ipairs(res.storage.removed) do parts[#parts + 1] = "storage -" .. n end
+  for _, n in ipairs(res.notes) do parts[#parts + 1] = n end
+  return #parts > 0 and table.concat(parts, ", ") or "nothing else changed"
+end
+
+-- Saves the config and has the running service pick it up.
+local function saveAndApply(cfg)
+  if not config.save(cfg) then
+    printError("Could not write " .. cfg.path)
+    return
+  end
+  local vault = quietClient()
+  if not vault then
+    print("Saved " .. cfg.path .. ". It applies when the service starts.")
+    return
+  end
+  local ok, res = pcall(vault.reload)
+  if not ok then
+    printError("Saved, but the service could not apply it: " .. tostring(res))
+    return
+  end
+  print("Applied: " .. describeApplied(res) .. ".")
+end
+
+local function accessCommand(a)
+  local sub = a[2]
+  local cfg = loadForEdit()
+  if not cfg then return end
+  cfg.access = cfg.access or {}
+  if sub == nil or sub == "list" then
+    if #cfg.access == 0 then
+      print("No screens yet. Add one: " .. NAME .. " access add <name> <chest> <monitor> [pin=1234] [scale=0.5]")
+      return
+    end
+    local live = {}
+    local vault = quietClient()
+    if vault then
+      local ok, st = pcall(vault.access)
+      if ok then
+        for _, s in ipairs(st) do live[s.name or s.monitor] = s end
+      end
+    end
+    for _, ap in ipairs(cfg.access) do
+      local s = live[ap.name or ap.monitor]
+      local state = ""
+      if s then state = s.up and (s.locked and "  up, locked" or "  up") or "  DOWN" end
+      print(string.format("%-10s %-20s %-10s%s%s%s", ap.name or "?", ap.chest, ap.monitor,
+        ap.pin and " PIN" or "", ap.scale and (" x" .. ap.scale) or "", state))
+    end
+  elseif sub == "add" then
+    local name, chest, monitor = a[3], a[4], a[5]
+    if not (name and chest and monitor) then
+      printError("usage: " .. NAME .. " access add <name> <chest> <monitor> [pin=..] [scale=..] [lockAfter=..]")
+      return
+    end
+    if config.findAccess(cfg, name) then
+      printError("There is already a screen called " .. name)
+      return
+    end
+    local ap = { name = name, chest = chest, monitor = monitor }
+    local ok, err = assignments(a, 6, ap, { pin = true, scale = true, lockAfter = true })
+    if not ok then
+      printError(err)
+      return
+    end
+    cfg.access[#cfg.access + 1] = ap
+    saveAndApply(cfg)
+  elseif sub == "set" then
+    local ap = a[3] and config.findAccess(cfg, a[3])
+    if not ap then
+      printError("No screen called " .. tostring(a[3]))
+      return
+    end
+    local ok, err = assignments(a, 4, ap, { name = true, chest = true, monitor = true, pin = true, scale = true, lockAfter = true })
+    if not ok then
+      printError(err)
+      return
+    end
+    saveAndApply(cfg)
+  elseif sub == "remove" then
+    local ap, i = a[3] and config.findAccess(cfg, a[3])
+    if not ap then
+      printError("No screen called " .. tostring(a[3]))
+      return
+    end
+    table.remove(cfg.access, i)
+    saveAndApply(cfg)
+  else
+    printError("usage: " .. NAME .. " access [list, add <name> <chest> <monitor> [key=value ..], set <name> key=value .., remove <name>]")
+    print("keys: name chest monitor pin scale lockAfter   (pin= removes the PIN)")
+  end
+end
+
+local function storageCommand(a)
+  local sub = a[2]
+  local cfg = loadForEdit()
+  if not cfg then return end
+  local function without(list, name)
+    local out = {}
+    for _, n in ipairs(list or {}) do
+      if n ~= name then out[#out + 1] = n end
+    end
+    return out
+  end
+  local function with(list, name)
+    local out = without(list, name)
+    out[#out + 1] = name
+    return out
+  end
+  local function show()
+    print("Storage types: " .. table.concat(cfg.storage.types or {}, ", "))
+    if #(cfg.storage.names or {}) > 0 then print("Also storage:  " .. table.concat(cfg.storage.names, ", ")) end
+    if #(cfg.storage.exclude or {}) > 0 then print("Never storage: " .. table.concat(cfg.storage.exclude, ", ")) end
+    local now = config.storageNames(cfg)
+    print("Storage now:   " .. (#now > 0 and table.concat(now, ", ") or "nothing"))
+  end
+  local name = a[3]
+  if sub == nil or sub == "list" then
+    show()
+    return
+  elseif sub == "types" and name then
+    cfg.storage.types = parseValue("types", name) or {}
+  elseif sub == "add" and name then
+    cfg.storage.names = with(cfg.storage.names, name)
+    cfg.storage.exclude = without(cfg.storage.exclude, name)
+  elseif sub == "remove" and name then
+    cfg.storage.names = without(cfg.storage.names, name)
+  elseif sub == "exclude" and name then
+    cfg.storage.exclude = with(cfg.storage.exclude, name)
+    cfg.storage.names = without(cfg.storage.names, name)
+  elseif sub == "include" and name then
+    cfg.storage.exclude = without(cfg.storage.exclude, name)
+  else
+    printError("usage: " .. NAME .. " storage [list, types <type,type>, add <inventory>, remove <inventory>, exclude <inventory>, include <inventory>]")
+    return
+  end
+  show()
+  saveAndApply(cfg)
+end
+
+local function setCommand(a)
+  local cfg = loadForEdit()
+  if not cfg then return end
+  if #a < 2 then
+    print(string.format("presets=%s stackPresets=%s", table.concat(cfg.presets, ","), table.concat(cfg.stackPresets, ",")))
+    print(string.format("lockAfter=%s rescanSeconds=%s hostname=%s rednet=%s logLevel=%s",
+      tostring(cfg.lockAfter), tostring(cfg.rescanSeconds), tostring(cfg.hostname), tostring(cfg.rednet), tostring(cfg.logLevel)))
+    local n = 0
+    for item, cat in pairs(cfg.categories or {}) do
+      print("category " .. item .. " = " .. tostring(cat))
+      n = n + 1
+    end
+    print("Change with: " .. NAME .. " set key=value ..   or   " .. NAME .. " set category <item> <block, item, resource, unstackable or ->")
+    return
+  end
+  if a[2] == "category" then
+    local item, cat = a[3], a[4]
+    if not item or not (cat == "-" or category.valid(cat)) then
+      printError("usage: " .. NAME .. " set category <item name> <block, item, resource, unstackable or ->")
+      return
+    end
+    cfg.categories = cfg.categories or {}
+    cfg.categories[item] = cat ~= "-" and cat or nil
+    saveAndApply(cfg)
+    return
+  end
+  local ok, err = assignments(a, 2, cfg, { presets = true, stackPresets = true, lockAfter = true, rescanSeconds = true, hostname = true, rednet = true, logLevel = true })
+  if not ok then
+    printError(err)
+    return
+  end
+  saveAndApply(cfg)
+end
+
+-- Setup wizard ---------------------------------------------------------
+-- The computer's screen cannot scroll back, so every step gets a fresh
+-- screen with just what that step needs, and long lists pause before they
+-- run off the top.
 
 local function clearScreen(title)
   term.setBackgroundColor(colors.black)
@@ -120,14 +357,8 @@ local function yesNo(prompt, default)
   return default
 end
 
-local function list(t)
-  local out = {}
-  for s in tostring(t or ""):gmatch("[^,%s]+") do out[#out + 1] = s end
-  return out
-end
-
 local function setup()
-  local cfg = config.load(ROOT)
+  local cfg = config.load(ROOT) or config.defaultsFor(ROOT)
   local STEPS = 4
 
   -- 1. what is on the network
@@ -151,9 +382,9 @@ local function setup()
   print("")
   print("Storage now: " .. (#config.storageNames(cfg) > 0 and table.concat(config.storageNames(cfg), ", ") or "nothing"))
   print("")
-  cfg.storage.types = list(askLine("Storage types (comma separated)", table.concat(cfg.storage.types, ",")))
+  cfg.storage.types = parseValue("types", askLine("Storage types (comma separated)", table.concat(cfg.storage.types, ","))) or {}
   local extra = askLine("Extra storage inventories by name, or '-' for none", #cfg.storage.names > 0 and table.concat(cfg.storage.names, ",") or "-")
-  cfg.storage.names = extra == "-" and {} or list(extra)
+  cfg.storage.names = parseValue("names", extra) or {}
   print("")
   print("Storage will be: " .. (#config.storageNames(cfg) > 0 and table.concat(config.storageNames(cfg), ", ") or "nothing (check the types)"))
   waitEnter("Enter to continue")
@@ -215,17 +446,18 @@ local function setup()
 
   clearScreen("Warehouse setup: done")
   cfg.hostname = askLine("Name of this warehouse on the network", cfg.hostname)
-  config.save(cfg)
   print("")
-  print("Saved " .. cfg.path)
   print("Storage: " .. table.concat(config.storageNames(cfg), ", "))
   for _, ap in ipairs(cfg.access) do
     print("Screen " .. ap.name .. ": " .. ap.chest .. " + " .. ap.monitor .. (ap.pin and " (PIN)" or ""))
   end
   print("")
-  print("Start with '" .. NAME .. "'. '" .. NAME .. " startup' starts it on every boot.")
-  if client() then print("The service is running: run '" .. NAME .. " stop' and start it again to use the new settings.") end
+  saveAndApply(cfg)
+  if not quietClient() then print("Start with '" .. NAME .. "'. '" .. NAME .. " startup' starts it on every boot.") end
+  print("Later changes: '" .. NAME .. " access', '" .. NAME .. " storage', '" .. NAME .. " set' apply at once.")
 end
+
+-- Other commands -------------------------------------------------------
 
 local function showKey(sub)
   local secure = require("lib.secure")
@@ -297,16 +529,60 @@ local function install()
   print("The service now starts on boot (" .. path .. "), and 'wh' and 'warehouse' work from any directory.")
 end
 
--- The service itself.
+-- The service -----------------------------------------------------------
+
+-- Background work: applies config file edits, re-reads storage now and
+-- then, and picks up inventories appearing or disappearing. Waiting on
+-- the service drops events meant for this coroutine, so an overdue check
+-- also runs on any other timer.
+local function maintenance(service)
+  local CHECK = 2
+  local timer = os.startTimer(CHECK)
+  local nextCheck = os.clock() + CHECK
+  local rescanDue = os.clock() + (tonumber(service.cfg.rescanSeconds) or 0)
+  local i = 0
+  while true do
+    local ev, a = os.pullEvent()
+    if ev == "timer" and (a == timer or os.clock() >= nextCheck) then
+      timer = os.startTimer(CHECK)
+      nextCheck = os.clock() + CHECK
+      local m = config.modified(ROOT)
+      if m ~= service.configSeen then
+        service.configSeen = m
+        local ok, res = service:request("reload")
+        if not ok then log.warn("config changed but could not be applied: " .. tostring(res)) end
+      end
+      local period = tonumber(service.cfg.rescanSeconds) or 0
+      if period > 0 and os.clock() >= rescanDue then
+        rescanDue = os.clock() + period
+        service:request("rediscover")
+        local order = service.index.order
+        if #order > 0 then
+          i = i % #order + 1
+          service:request("rescan", { inventory = order[i] })
+        end
+      end
+    elseif ev == "peripheral" or ev == "peripheral_detach" then
+      service:request("rediscover")
+    end
+  end
+end
+
 local function runService()
   local Index = require("lib.index")
   local Service = require("lib.service")
   local transport = require("lib.transport")
-  local Access = require("lib.access")
+  local Runner = require("lib.runner")
 
-  local cfg = config.load(ROOT)
-  log.setup({ path = fs.combine(DATA, "log"), level = cfg.logLevel })
-  if not cfg.exists then log.warn("no config at " .. cfg.path .. "; run '" .. NAME .. " setup' (serving every create:item_vault for now)") end
+  local cfg, err = config.load(ROOT)
+  if not cfg then
+    cfg = config.defaultsFor(ROOT)
+    log.setup({ path = fs.combine(DATA, "log"), level = cfg.logLevel })
+    log.error(err .. "; running with defaults until the file is fixed")
+  else
+    log.setup({ path = fs.combine(DATA, "log"), level = cfg.logLevel })
+    if not cfg.exists then log.warn("no config at " .. cfg.path .. "; run '" .. NAME .. " setup' (serving every create:item_vault for now)") end
+  end
 
   local itemsPath = fs.combine(DATA, "items")
   local recentPath = fs.combine(DATA, "recent")
@@ -323,52 +599,19 @@ local function runService()
   index:scanAll()
   log.info(string.format("%d items of %d kinds in %d/%d slots", index.totals.items, util.size(index.items), index.totals.used, index.totals.slots))
 
-  local service = Service.new({ index = index, cfg = cfg, log = log, root = ROOT })
-  local tasks = {
-    function() service:runWorker() end,
-    function() transport.runLocal(service) end,
-    function() os.pullEvent("warehouse_stop") end,
-  }
-  if cfg.rednet ~= false then
-    local key = loadKey()
-    if not key then
-      log.info("making the warehouse key (see '" .. NAME .. " key')")
-      key = newKey()
-    end
-    tasks[#tasks + 1] = function() transport.runRednet(service, cfg, key) end
+  local key = loadKey()
+  if not key then
+    log.info("making the warehouse key (see '" .. NAME .. " key')")
+    key = newKey()
   end
-  for i, apCfg in ipairs(cfg.access or {}) do
-    local ap = Access.new(service, apCfg, cfg)
-    service.access[i] = ap
-    if apCfg.name then service.access[apCfg.name] = ap end
-    tasks[#tasks + 1] = function() ap:run() end
-  end
-  tasks[#tasks + 1] = function()
-    -- Background re-reads. Waiting on the service drops events meant for
-    -- this coroutine, so an overdue pass runs on any event, not only on
-    -- its own timer.
-    local period = tonumber(cfg.rescanSeconds) or 0
-    local due = period > 0 and (os.clock() + period) or math.huge
-    local timer = period > 0 and os.startTimer(period) or nil
-    local i = 0
-    while true do
-      local ev, a = os.pullEvent()
-      if (ev == "timer" and a == timer) or os.clock() >= due then
-        service:request("rediscover")
-        if #index.order > 0 then
-          i = i % #index.order + 1
-          service:request("rescan", { inventory = index.order[i] })
-        end
-        if period > 0 then
-          timer = os.startTimer(period)
-          due = os.clock() + period
-        end
-      elseif ev == "peripheral" or ev == "peripheral_detach" then
-        service:request("rediscover")
-      end
-    end
-  end
-  parallel.waitForAny(table.unpack(tasks))
+  local runner = Runner.new()
+  local service = Service.new({ index = index, cfg = cfg, log = log, root = ROOT, runner = runner, key = key })
+  runner:add("worker", function() service:runWorker() end)
+  runner:add("local", function() transport.runLocal(service) end)
+  if cfg.rednet ~= false then service:startRednet() end
+  service:applyScreens()
+  runner:add("maintenance", function() maintenance(service) end)
+  runner:run(function() return service.stopping end)
   return service.stopping
 end
 
@@ -377,6 +620,18 @@ if cmd == "help" or cmd == "-h" or cmd == "--help" then
   usage()
 elseif cmd == "setup" then
   setup()
+elseif cmd == "access" or cmd == "screens" then
+  accessCommand(args)
+elseif cmd == "storage" then
+  storageCommand(args)
+elseif cmd == "set" then
+  setCommand(args)
+elseif cmd == "reload" then
+  local vault = client()
+  if vault then
+    local ok, res = pcall(vault.reload)
+    if ok then print("Applied: " .. describeApplied(res) .. ".") else printError(tostring(res)) end
+  end
 elseif cmd == "key" then
   showKey(args[2])
 elseif cmd == "status" then
@@ -395,9 +650,7 @@ elseif cmd == nil or cmd == "run" or cmd == "--tab" then
   local inTab = args[#args] == "--tab"
   local foreground = cmd == "run"
   if not inTab and not foreground then
-    local wh = require("api")
-    local ok = pcall(wh.connect, { mode = "local", probeTimeout = 1.5 })
-    if ok then
+    if quietClient() then
       print("The service is already running.")
       return
     end

@@ -8,6 +8,10 @@ function L.setup(opts)
   L.echo = opts.echo ~= false
 end
 
+function L.setLevel(level)
+  L.level = levels[level] and level or "info"
+end
+
 local function write(level, msg)
   if levels[level] < levels[L.level] then return end
   local line = string.format("[%s] %s %s", os.date("%H:%M:%S"), level:upper(), tostring(msg))

@@ -243,6 +243,9 @@ function Client:config() return must(self, "config") end
 function Client:access() return must(self, "access") end
 function Client:shutdown() return must(self, "shutdown") end
 
+-- Makes the service read its config file again and apply the changes.
+function Client:reload() return must(self, "reload") end
+
 -- Asks for change events (needed over rednet; harmless locally).
 function Client:subscribe(ttl)
   ttl = ttl or 60

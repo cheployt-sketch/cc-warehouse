@@ -66,9 +66,31 @@ warehouse status                what it holds
 }
 ```
 
-Storage is every inventory on the network whose peripheral type is in `storage.types`, plus `storage.names`, minus `storage.exclude` and the access point chests. Everything else is "free" for apps. Restart the service after changing the config (`warehouse stop`, then `warehouse`).
+Storage is every inventory on the network whose peripheral type is in `storage.types`, plus `storage.names`, minus `storage.exclude` and the access point chests. Everything else is "free" for apps.
 
 Other commands: `warehouse key` (the pairing key), `warehouse log`, `warehouse stop`.
+
+## Changing the setup while it runs
+
+Nothing needs a restart. The service re-reads `/warehouse/config` within two seconds of it changing (a half-written file is ignored until it is complete) and applies the differences: screens are started, stopped or re-pointed at another chest or monitor, storage is discovered again, categories are recomputed, the hostname is re-registered, rednet can be switched on or off. Screens that stay keep what you were doing on them.
+
+Edit the file by hand, run `warehouse setup` again, or change one thing at a time:
+
+```
+warehouse access                                    the screens, and whether they are up
+warehouse access add Shop minecraft:chest_3 monitor_2 pin=4321 scale=0.5
+warehouse access set Shop chest=minecraft:barrel_0 pin=      (pin= removes the PIN)
+warehouse access remove Shop
+warehouse storage                                   the rules, and what counts as storage now
+warehouse storage types create:item_vault,minecraft:barrel
+warehouse storage add minecraft:chest_5             one more inventory as storage
+warehouse storage exclude create:item_vault_3       keep this one out
+warehouse set presets=1,8,16,32,64 lockAfter=0 rescanSeconds=30 hostname=wh logLevel=debug
+warehouse set category create_new_age:thorium resource
+warehouse reload                                    apply a file you edited (or just wait two seconds)
+```
+
+Each command saves the config and tells the running service, which answers with what changed. Apps can do the same with `vault.reload()`. Inventories plugged into the network (or unplugged) are noticed by themselves, too.
 
 ## The screens
 

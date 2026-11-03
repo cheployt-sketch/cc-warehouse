@@ -40,11 +40,25 @@ local function copy(t)
   return out
 end
 
+-- The defaults, as a config of their own (used when the file is missing or
+-- cannot be read).
+function C.defaultsFor(root)
+  local cfg = copy(C.defaults)
+  cfg.path = fs.combine(root, "config")
+  cfg.exists = false
+  return cfg
+end
+
+-- Loads the config file over the defaults. Returns nil and a reason when
+-- the file exists but cannot be read (half-written, or a typo), so that a
+-- running service keeps its current settings instead of losing them.
 function C.load(root)
   local path = fs.combine(root, "config")
   local cfg = copy(C.defaults)
-  local file = util.readTable(path)
-  if file then
+  local file
+  if fs.exists(path) then
+    file = util.readTable(path)
+    if not file then return nil, "cannot read " .. path .. " (not a valid Lua table)" end
     for k, v in pairs(file) do
       if k == "storage" and type(v) == "table" then
         for k2, v2 in pairs(v) do cfg.storage[k2] = v2 end
@@ -56,6 +70,23 @@ function C.load(root)
   cfg.path = path
   cfg.exists = file ~= nil
   return cfg
+end
+
+-- When the config file last changed (ms), or nil when it does not exist.
+function C.modified(root)
+  local path = fs.combine(root, "config")
+  if not fs.exists(path) then return nil end
+  local ok, attr = pcall(fs.attributes, path)
+  if ok and type(attr) == "table" then return attr.modified or attr.modification or 0 end
+  return 0
+end
+
+-- The access point with this name (or monitor), and its position.
+function C.findAccess(cfg, name)
+  for i, ap in ipairs(cfg.access or {}) do
+    if ap.name == name or ap.monitor == name then return ap, i end
+  end
+  return nil
 end
 
 function C.save(cfg)

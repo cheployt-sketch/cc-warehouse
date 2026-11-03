@@ -124,11 +124,17 @@ function Index.new(opts)
   self.pending = {}
   self.detailsDirty = false
   self.totals = { slots = 0, used = 0, items = 0 }
-  -- Categories are cheap to work out and the rules (or the config's
-  -- overrides) may have changed since they were cached, so redo them.
-  for _, d in pairs(self.details) do d.category = category.classify(d, self.categories) end
+  self:reclassify()
   for _, name in ipairs(opts.storage or {}) do self:addInventory(name) end
   return self
+end
+
+-- Works out every cached item's category again. Cheap, and needed when the
+-- rules or the config's overrides change.
+function Index:reclassify(categories)
+  if categories then self.categories = categories end
+  for _, d in pairs(self.details) do d.category = category.classify(d, self.categories) end
+  self.version = self.version + 1
 end
 
 -- Notes that an item kind was just moved in or out.

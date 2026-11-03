@@ -35,13 +35,13 @@ function T.openModems()
   return n
 end
 
-function T.runRednet(service, cfg, key)
+function T.runRednet(service, key)
   local log = service.log
   if T.openModems() == 0 then
     log.warn("no modem attached: apps on other computers cannot reach this warehouse")
     while true do os.pullEvent("warehouse_never") end
   end
-  local ok, err = pcall(rednet.host, secure.PROTOCOL, cfg.hostname or "vault")
+  local ok, err = pcall(rednet.host, secure.PROTOCOL, service.cfg.hostname or "vault")
   if not ok then log.warn("rednet.host failed: " .. tostring(err)) end
   service.sendEvent = function(id, ev)
     local ok2, e = pcall(rednet.send, id, secure.seal(key, "event", { event = ev }), secure.EVENT_PROTOCOL)

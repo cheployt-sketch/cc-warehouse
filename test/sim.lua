@@ -379,5 +379,51 @@ test("recent lists the items moved last, newest first", function()
   eq(index:list({ category = "recent" })[1].key, "minecraft:cobblestone", "moving again puts it first")
 end)
 
+test("runner adds and removes tasks while running, honouring filters", function()
+  local Runner = require("lib.runner")
+  os.pullEventRaw = function(filter) return coroutine.yield(filter) end
+  local r = Runner.new()
+  -- appended with a counter: Fengari gets # wrong for a table filled from several coroutines
+  local log, n, stop = {}, 0, false
+  local function note(s)
+    n = n + 1
+    log[n] = s
+  end
+  r:add("one", function()
+    while true do
+      local e = os.pullEventRaw()
+      note("one:" .. e)
+      if e == "a" then
+        r:add("two", function()
+          while true do note("two:" .. os.pullEventRaw()) end
+        end)
+      end
+    end
+  end)
+  r:add("picky", function()
+    while true do note("picky:" .. os.pullEventRaw("b")) end
+  end)
+  r:add("stopper", function()
+    while true do
+      if os.pullEventRaw() == "stop" then stop = true end
+    end
+  end)
+  local main = coroutine.create(function() r:run(function() return stop end) end)
+  local events = { { "a" }, { "b" }, { "stop" } }
+  local ok, err = coroutine.resume(main)
+  eq(ok, true, tostring(err))
+  local guard = 0
+  while coroutine.status(main) ~= "dead" do
+    guard = guard + 1
+    if guard > 20 then error("runner did not stop") end
+    ok, err = coroutine.resume(main, table.unpack(table.remove(events, 1) or { "idle" }))
+    eq(ok, true, tostring(err))
+  end
+  eq(table.concat(log, " "), "one:a one:b picky:b two:b one:stop two:stop", "dispatch order and filters")
+  eq(r:has("two"), true, "two still registered")
+  r:remove("two")
+  eq(r:has("two"), false, "two removed")
+end)
+
 print(string.format("%d passed, %d failed (%d simulated peripheral calls)", passed, failures, calls))
 if failures > 0 then error("tests failed", 0) end
