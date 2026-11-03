@@ -30,6 +30,8 @@ end
 
 function UI:begin(bg)
   self.hits = {}
+  self.fields = {}
+  self.cursorPos = nil
   local win = self.win
   win.setVisible(false)
   win.setBackgroundColor(bg or colors.black)
@@ -40,6 +42,82 @@ end
 function UI:finish()
   self.win.setVisible(true)
   self.win.setVisible(false)
+  local t = self.target
+  if self.cursorPos and t.setCursorBlink then
+    t.setCursorPos(self.cursorPos[1], self.cursorPos[2])
+    t.setTextColor(self.color and colors.black or colors.white)
+    t.setCursorBlink(true)
+  elseif t.setCursorBlink then
+    t.setCursorBlink(false)
+  end
+end
+
+-- Text fields (for terminals). A field is { text, cursor }; clicking one
+-- focuses it, and the owner feeds it key and char events with keyField /
+-- charField.
+function UI.newField(text, o)
+  o = o or {}
+  text = tostring(text == nil and "" or text)
+  return { text = text, cursor = #text + 1, max = o.max, filter = o.filter }
+end
+
+function UI:field(x, y, w, f)
+  self.fields[#self.fields + 1] = f
+  f.cursor = util.clamp(f.cursor or (#f.text + 1), 1, #f.text + 1)
+  local start = math.max(1, f.cursor - w + 1)
+  local shown = f.text:sub(start, start + w - 1)
+  local focused = self.focus == f
+  if self.color then
+    self:text(x, y, util.fit(shown, w), colors.black, focused and colors.white or colors.lightGray)
+  else
+    self:text(x, y, "[" .. util.fit(shown, w - 2) .. "]")
+  end
+  self:region(x, y, x + w - 1, y, function(cx)
+    self.focus = f
+    f.cursor = util.clamp(start + cx - 1, 1, #f.text + 1)
+  end)
+  if focused then self.cursorPos = { x + (f.cursor - start), y } end
+end
+
+function UI:focusNext()
+  if #self.fields == 0 then return end
+  local idx = 0
+  for i, f in ipairs(self.fields) do
+    if f == self.focus then idx = i end
+  end
+  self.focus = self.fields[idx % #self.fields + 1]
+  self.focus.cursor = #self.focus.text + 1
+end
+
+-- Returns true when the key changed or moved within the field.
+function UI.keyField(f, code)
+  local n = #f.text
+  if code == keys.backspace then
+    if f.cursor > 1 then
+      f.text = f.text:sub(1, f.cursor - 2) .. f.text:sub(f.cursor)
+      f.cursor = f.cursor - 1
+    end
+  elseif code == keys.delete then
+    f.text = f.text:sub(1, f.cursor - 1) .. f.text:sub(f.cursor + 1)
+  elseif code == keys.left then
+    f.cursor = math.max(1, f.cursor - 1)
+  elseif code == keys.right then
+    f.cursor = math.min(n + 1, f.cursor + 1)
+  elseif code == keys.home then
+    f.cursor = 1
+  elseif code == keys["end"] then
+    f.cursor = n + 1
+  else
+    return false
+  end
+  return true
+end
+
+function UI.charField(f, ch)
+  if f.max and #f.text >= f.max then return end
+  if f.filter and not ch:match(f.filter) then return end
+  f.text = f.text:sub(1, f.cursor - 1) .. ch .. f.text:sub(f.cursor)
+  f.cursor = f.cursor + 1
 end
 
 function UI:text(x, y, s, fg, bg)

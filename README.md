@@ -70,6 +70,18 @@ Storage is every inventory on the network whose peripheral type is in `storage.t
 
 Other commands: `warehouse key` (the pairing key), `warehouse log`, `warehouse stop`.
 
+## The control panel
+
+The warehouse computer's own screen shows a control panel: the service draws it in its tab (`console = true` in the config, the default), and `warehouse ui` opens it in any other tab. Click the shell tab at the top to get back to the command line.
+
+- **Status**: items, kinds, fill per storage inventory, the screens and whether they are up, network and uptime; buttons to reload the config, compact, rescan, and stop the service (click twice).
+- **Screens**: every access point with its chest, monitor and state. Click one to change it (name, chest, monitor, PIN, lock time, text scale, with pickers for the chest and monitor) or remove it; `Add screen` makes a new one.
+- **Storage**: the storage types, and every inventory on the network with its role and fill: `Add`, `Exclude`, `Include` or `Remove` per row.
+- **Settings**: presets, stack presets, lock time, rescan period, hostname, rednet on/off, log level, your own item categories, and the pairing key.
+- **Log**: the service log, scrollable.
+
+Everything is clicked; text fields take typing, Tab moves to the next field, Esc backs out. Every change is written to the config and applied to the running service at once, and the panel says what changed.
+
 ## Changing the setup while it runs
 
 Nothing needs a restart. The service re-reads `/warehouse/config` within two seconds of it changing (a half-written file is ignored until it is complete) and applies the differences: screens are started, stopped or re-pointed at another chest or monitor, storage is discovered again, categories are recomputed, the hostname is re-registered, rednet can be switched on or off. Screens that stay keep what you were doing on them.

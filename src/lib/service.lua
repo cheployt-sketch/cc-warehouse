@@ -412,4 +412,18 @@ ops["debug.touch"] = function(self, a, req)
   return true
 end
 
+-- The control panel in the service's tab: its text, and a click on it
+-- (which reaches it only while its tab is the focused one).
+ops["debug.console"] = function(self, a, req)
+  if req.transport ~= "local" then error("debug ops are only allowed from the warehouse computer", 0) end
+  if not self.console then error("the control panel is not running in the service's tab", 0) end
+  return self.console.ui:lines()
+end
+
+ops["debug.click"] = function(self, a, req)
+  if req.transport ~= "local" then error("debug ops are only allowed from the warehouse computer", 0) end
+  os.queueEvent("mouse_click", 1, needCount(a, "x"), needCount(a, "y"))
+  return true
+end
+
 return Service

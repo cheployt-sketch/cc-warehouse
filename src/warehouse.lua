@@ -42,6 +42,7 @@ local function usage()
   print("  " .. NAME .. " storage    change what counts as storage (live)")
   print("  " .. NAME .. " set        presets, lock time, hostname, ... (live)")
   print("  " .. NAME .. " reload     apply a hand-edited config")
+  print("  " .. NAME .. " ui         the control panel, in this tab")
   print("  " .. NAME .. " key        show the pairing key (key new, key disk)")
   print("  " .. NAME .. " status     what the service holds")
   print("  " .. NAME .. " stop       stop the service")
@@ -611,6 +612,21 @@ local function runService()
   if cfg.rednet ~= false then service:startRednet() end
   service:applyScreens()
   runner:add("maintenance", function() maintenance(service) end)
+  -- The control panel, drawn in this tab (the log still goes to its file).
+  if cfg.console ~= false and term.isColor() then
+    log.echo = false
+    local tabTerm = term.current()
+    runner:add("console", function()
+      sleep(0.5)
+      local wh = require("api")
+      local ok, vault = pcall(wh.connect, { mode = "local", probeTimeout = 3, timeout = 4 })
+      local Console = require("console")
+      local con = Console.new({ vault = ok and vault or nil, root = ROOT, target = tabTerm })
+      service.console = con
+      con:run()
+      while true do os.pullEvent("warehouse_never") end
+    end)
+  end
   runner:run(function() return service.stopping end)
   return service.stopping
 end
@@ -632,6 +648,16 @@ elseif cmd == "reload" then
     local ok, res = pcall(vault.reload)
     if ok then print("Applied: " .. describeApplied(res) .. ".") else printError(tostring(res)) end
   end
+elseif cmd == "ui" or cmd == "console" or cmd == "panel" then
+  local Console = require("console")
+  local wh = require("api")
+  local ok, vault = pcall(wh.connect, { mode = "local", probeTimeout = 1.5, timeout = 4 })
+  local con = Console.new({ vault = ok and vault or nil, root = ROOT, standalone = true })
+  con:run()
+  term.setBackgroundColor(colors.black)
+  term.setTextColor(colors.white)
+  term.clear()
+  term.setCursorPos(1, 1)
 elseif cmd == "key" then
   showKey(args[2])
 elseif cmd == "status" then
@@ -659,7 +685,13 @@ elseif cmd == nil or cmd == "run" or cmd == "--tab" then
     local tab = shell.openTab(programPath, "--tab")
     if tab then
       multishell.setTitle(tab, NAME)
-      print(NAME .. " started in tab " .. tab .. ". '" .. NAME .. " status' shows what it holds.")
+      local cfg = config.load(ROOT)
+      if cfg and cfg.console ~= false and term.isColor() then
+        multishell.setFocus(tab)
+        print(NAME .. " started in tab " .. tab .. " with the control panel. Click the shell tab to come back here.")
+      else
+        print(NAME .. " started in tab " .. tab .. ". '" .. NAME .. " status' shows what it holds.")
+      end
       return
     end
   end

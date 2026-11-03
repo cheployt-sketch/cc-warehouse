@@ -31,6 +31,8 @@ C.defaults = {
   rednet = true,
   hostname = "vault",
   logLevel = "info",
+  -- Show the control panel in the service's tab on this computer.
+  console = true,
 }
 
 local function copy(t)
