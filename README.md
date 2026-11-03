@@ -43,6 +43,8 @@ On a computer with HTTP enabled (the default), one line fetches everything into 
 wget run https://raw.githubusercontent.com/cheployt-sketch/cc-warehouse/main/src/install.lua
 ```
 
+If the repository is private, use the one-file build instead: `node publish.cjs` packs the whole folder into `dist/warehouse.lua` and puts it in a secret gist (id in `gists.json`, so the URL stays the same), and prints the line to type, of the form `wget run https://gist.githubusercontent.com/<user>/<gist id>/raw/warehouse.lua`. It takes the same `crafter` and `client` arguments and does the same as the installer.
+
 It downloads the files listed in `src/files.txt` (regenerate that list with `node test/manifest.cjs` after adding files) and leaves the config, key and data alone, so it also works as an update. The same line with `crafter` after the URL installs the same files and then explains the crafter's steps (on a turtle: pairing and `crafter worker`), and with `client` it explains pairing an app computer; on a turtle `crafter` is the default. Without HTTP, copy the `src` folder to the computer as `/warehouse` (with the cc-bridge: `cc_push src /warehouse`; or carry it on a floppy disk). Then on the computer:
 
 ```
