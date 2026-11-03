@@ -612,10 +612,24 @@ local function runService()
   if cfg.rednet ~= false then service:startRednet() end
   service:applyScreens()
   runner:add("maintenance", function() maintenance(service) end)
-  -- The Parcel Service, as a task of this service (see parcel.lua).
-  if cfg.parcels ~= false then
-    runner:add("parcels", function()
+  -- Apps hosted inside the service run in their own task; a failure in one
+  -- is logged and retried, and never takes the service down.
+  local function hosted(name, body)
+    runner:add(name, function()
       sleep(0.5)
+      while true do
+        local ok, err = pcall(body)
+        if ok then break end
+        if tostring(err):find("Terminated") then error(err, 0) end
+        log.error(name .. " failed: " .. tostring(err) .. "; starting it again in 10 s")
+        sleep(10)
+      end
+      while true do os.pullEvent("warehouse_never") end
+    end)
+  end
+  -- The Parcel Service (see parcel.lua).
+  if cfg.parcels ~= false then
+    hosted("parcels", function()
       local wh = require("api")
       local Parcel = require("parcel")
       local vault = wh.connect({ mode = "local", probeTimeout = 3 })
@@ -626,15 +640,13 @@ local function runService()
   if cfg.console ~= false and term.isColor() then
     log.echo = false
     local tabTerm = term.current()
-    runner:add("console", function()
-      sleep(0.5)
+    hosted("console", function()
       local wh = require("api")
       local ok, vault = pcall(wh.connect, { mode = "local", probeTimeout = 3, timeout = 4 })
       local Console = require("console")
       local con = Console.new({ vault = ok and vault or nil, root = ROOT, target = tabTerm })
       service.console = con
       con:run()
-      while true do os.pullEvent("warehouse_never") end
     end)
   end
   runner:run(function() return service.stopping end)

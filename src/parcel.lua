@@ -38,8 +38,9 @@ function P.parseItems(kind, text)
   for tok in tostring(text or ""):gmatch("[^,]+") do
     tok = tok:gsub("^%s+", ""):gsub("%s+$", "")
     if tok ~= "" and tok ~= "all" and tok ~= "*" then
-      local name = tok:match("^([^<=/#%s]+)")
-      if not name then return nil, "bad item: " .. tok end
+      local name = tok:match("^([^<=/#]+)")
+      name = name and name:gsub("%s+$", "")
+      if not name or name == "" then return nil, "bad item: " .. tok end
       local spec = { item = name }
       if kind == "deposit" then
         local limit = tok:match("<%s*(%d+)")
@@ -147,14 +148,8 @@ function P:saveStats()
   util.writeTable(P.statsPath(self.root), self.stats)
 end
 
--- Does a stack match an item spec? Exact key or id, or the id without its
--- namespace, or a display-name-like spelling ("Oak Planks" = oak_planks).
-local function norm(s) return tostring(s):lower():gsub("[%s%-]+", "_") end
 local function matches(spec, it)
-  if spec.item == it.key or spec.item == it.name then return true end
-  local want = norm(spec.item)
-  if want:find(":", 1, true) then return want == it.name:lower() end
-  return want == util.shortName(it.name):lower()
+  return util.itemMatches(spec.item, it.name, it.key)
 end
 
 -- Runs one task now. Returns the number moved and a message.
@@ -165,31 +160,41 @@ function P:runTask(t)
   if t.totalLimit then budget = math.max(0, t.totalLimit - st.moved) end
   if t.maxPerRun then budget = math.min(budget, t.maxPerRun) end
   if budget <= 0 then return 0, "lifetime budget used up" end
-  local moved, notes = 0, {}
+  local moved, notes, noted = 0, {}, {}
   local function tally(key, n)
     moved = moved + n
     st.items[key] = (st.items[key] or 0) + n
+  end
+  local function note(s)
+    if s and s ~= "nothing to store" and not noted[s] then
+      noted[s] = true
+      notes[#notes + 1] = s
+    end
   end
   if t.kind == "deposit" then
     if #t.items == 0 then
       local n, byKey, msg = v.deposit(t.inventory, { count = budget < math.huge and budget or nil })
       for k, c in pairs(byKey) do tally(k, c) end
-      if msg and msg ~= "nothing to store" then notes[#notes + 1] = msg end
+      note(msg)
     else
       local inv = v.inventory(t.inventory)
+      local vaultCount = {} -- per kind, asked once and kept up to date here
       for _, it in ipairs(inv.items) do
         if budget - moved <= 0 then break end
         for _, spec in ipairs(t.items) do
           if matches(spec, it) then
             local allowed = budget - moved
-            -- the vault's count of exactly this stack's kind
-            if spec.limit then allowed = math.min(allowed, spec.limit - v.count(it.key)) end
+            if spec.limit then
+              if not vaultCount[it.key] then vaultCount[it.key] = v.count(it.key) end
+              allowed = math.min(allowed, spec.limit - vaultCount[it.key])
+            end
             if allowed > 0 then
               local n, _, msg = v.deposit(t.inventory, { slot = it.slot, count = math.min(allowed, it.count) })
               tally(it.key, n)
-              if msg and msg ~= "nothing to store" then notes[#notes + 1] = msg end
+              if vaultCount[it.key] then vaultCount[it.key] = vaultCount[it.key] + n end
+              note(msg)
             elseif spec.limit then
-              notes[#notes + 1] = util.shortName(spec.item) .. " at limit"
+              note(util.shortName(spec.item) .. " at limit")
             end
             break
           end
@@ -213,9 +218,9 @@ function P:runTask(t)
         local ok, n, why = pcall(v.withdraw, spec.item, want, t.inventory)
         if ok then
           tally(spec.item, n)
-          if why then notes[#notes + 1] = util.shortName(spec.item) .. ": " .. why end
+          if why then note(util.shortName(spec.item) .. ": " .. why) end
         else
-          notes[#notes + 1] = util.shortName(spec.item) .. ": " .. tostring(n)
+          note(util.shortName(spec.item) .. ": " .. tostring(n))
         end
       end
     end
@@ -223,9 +228,14 @@ function P:runTask(t)
   return moved, #notes > 0 and table.concat(notes, "; ") or nil
 end
 
+-- Runs every task that is due (or the one task `force` names, due or
+-- not). Stats go to disk when a run changed something, and otherwise at
+-- most every STATS_EVERY seconds, so idle tasks do not wear the disk.
+local STATS_EVERY = 15
+
 function P:runDue(force)
   local now = os.clock()
-  local any = false
+  local ran = false
   for _, t in ipairs(self.tasks) do
     if (t.enabled and now >= (self.next[t.id] or 0)) or force == t.id then
       self.next[t.id] = now + t.interval
@@ -235,6 +245,7 @@ function P:runDue(force)
         st.runs = st.runs + 1
         st.lastRun = os.epoch("utc")
         if ok then
+          if moved > 0 or msg ~= st.lastMessage then self.statsDirty = true end
           st.moved = st.moved + moved
           st.lastMoved = moved
           st.lastMessage = msg
@@ -243,13 +254,18 @@ function P:runDue(force)
           st.errors = st.errors + 1
           st.lastMoved = 0
           st.lastMessage = tostring(moved)
+          self.statsDirty = true
           self.log("parcel " .. tostring(t.name or t.id) .. " failed: " .. tostring(moved))
         end
-        any = true
+        ran = true
       end
     end
   end
-  if any then self:saveStats() end
+  if ran and (self.statsDirty or now - (self.statsSaved or 0) >= STATS_EVERY) then
+    self.statsDirty = false
+    self.statsSaved = now
+    self:saveStats()
+  end
 end
 
 function P:run()

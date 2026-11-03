@@ -152,6 +152,7 @@ function Access:draw()
   end)
   if not ok then
     self.ok = false
+    self.failed = true
     self.service.log.warn("screen " .. self.name .. ": " .. tostring(err))
   end
   self.drawnVersion = self.index.version
@@ -251,8 +252,24 @@ function Access:drawControls(x, w, y2)
   return y
 end
 
+-- The list for the current search, category and order; worked out once
+-- per change of storage, not once per draw.
 function Access:listItems()
-  return self.index:list({ filter = self.search, category = self.category, sort = self.sort })
+  local c = self.listCache
+  if c and c.version == self.index.version and c.filter == self.search and c.category == self.category and c.sort == self.sort then
+    return c.items, c.total
+  end
+  local items, total = self.index:list({ filter = self.search, category = self.category, sort = self.sort })
+  self.listCache = { version = self.index.version, filter = self.search, category = self.category, sort = self.sort, items = items, total = total }
+  return items, total
+end
+
+-- Rows the control block takes at the bottom: pager, category rows, the
+-- search row and, when open, the keyboard.
+function Access:controlsHeight(w)
+  local labels = {}
+  for i, cat in ipairs(CATEGORIES) do labels[i] = category.LABELS[cat] end
+  return 1 + #UI.wrap(labels, w) + 1 + (self.keyboard and 5 or 0)
 end
 
 -- How many rows the chest panel wants, given `free` rows above the controls.
@@ -273,22 +290,27 @@ function Access:drawNarrow()
   local ui = self.ui
   local w, h = ui.w, ui.h
   self:drawHeader(1, w)
-  -- bottom-up: controls, keyboard, then the chest or amount panel
-  local rows = h - 1 - 4 - (self.keyboard and 5 or 0)
-  self.listRows = math.max(1, rows - (self.dialog and 9 or (#self.chest > 0 and 3 or 0)))
-  local top = self:drawControls(1, w, h)
+  -- Work the layout out first, so the pager counts the rows the list gets:
+  -- header, list, then (bottom-up) the chest or amount panel, the keyboard
+  -- and the controls.
+  local top = h - self:controlsHeight(w) + 1 -- first row of the controls
   local free = top - 2 -- rows between the header and the controls
+  local panelH, keyH = 0, 1
   if self.dialog then
-    local dh, keyH = self:dialogHeight(free)
-    dh = math.min(dh, math.max(1, free - 1))
-    self:drawDialog(1, top - dh, w, dh, keyH)
-    top = top - dh
+    local dh
+    dh, keyH = self:dialogHeight(free)
+    panelH = math.min(dh, math.max(1, free - 1))
   elseif #self.chest > 0 or self.chestMissing then
-    local ch = math.min(self:chestHeight(free), math.max(1, free - 1))
-    self:drawChest(1, top - ch, w, ch)
-    top = top - ch
+    panelH = math.min(self:chestHeight(free), math.max(1, free - 1))
   end
-  local y1, y2 = 2, top - 1
+  self.listRows = math.max(1, free - panelH)
+  self:drawControls(1, w, h)
+  if self.dialog then
+    self:drawDialog(1, top - panelH, w, panelH, keyH)
+  elseif panelH > 0 then
+    self:drawChest(1, top - panelH, w, panelH)
+  end
+  local y1, y2 = 2, top - panelH - 1
   if y2 < y1 then y2 = y1 end
   if self.tab == "stats" then self:drawStats(1, y1, w, y2) else self:drawItems(1, y1, w, y2) end
 end
@@ -300,8 +322,9 @@ function Access:drawWide()
   local rx, rw = lw + 2, w - lw - 1
   self:drawHeader(1, w)
   for y = 2, h do ui:text(lw + 1, y, " ", colors.white, ui:col("gray", colors.black)) end
-  self.listRows = math.max(1, h - 1 - 4 - (self.keyboard and 5 or 0))
-  local top = self:drawControls(1, lw, h)
+  local top = h - self:controlsHeight(lw) + 1
+  self.listRows = math.max(1, top - 2)
+  self:drawControls(1, lw, h)
   self:drawItems(1, 2, lw, top - 1)
   -- right column: chest or amount panel at the bottom, stats above
   local free = h - 1
@@ -631,6 +654,11 @@ end
 
 function Access:run()
   while not self.stopped do
+    if self.failed then
+      -- a draw just failed (monitor gone mid-frame, or a bug): do not spin
+      self.failed = false
+      sleep(2)
+    end
     local ok, err = self:attach()
     if ok then
       self:loop()

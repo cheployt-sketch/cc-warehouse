@@ -101,6 +101,16 @@ function Console:ask(op, args)
   return nil, res
 end
 
+-- The inventories on the network, with sizes. Asked for only where they
+-- are shown (the Storage page, pickers, Fill), since every size is a
+-- peripheral call.
+function Console:refreshPeripherals()
+  local list = self:ask("peripherals")
+  if not list then list = config.peripherals(self.data.cfg or config.defaultsFor(self.root)) end
+  self.data.peripherals = list
+  return list
+end
+
 function Console:refresh()
   local ping, err = self:ask("ping")
   self.data.ping = ping
@@ -109,14 +119,15 @@ function Console:refresh()
   if ping then
     self.data.stats = self:ask("stats") or self.data.stats
     self.data.access = self:ask("access") or self.data.access
-    self.data.peripherals = self:ask("peripherals") or self.data.peripherals
   end
   local cfg = config.load(self.root)
   self.data.cfgBroken = cfg == nil
   self.data.cfg = cfg or self.data.cfg or config.defaultsFor(self.root)
-  if not ping then self.data.peripherals = config.peripherals(self.data.cfg) end
-  self.data.parcels = Parcel.loadConfig(self.root)
-  self.data.pstats = Parcel.loadStats(self.root)
+  if self.page == "storage" or not self.data.peripherals then self:refreshPeripherals() end
+  if self.page == "parcels" or not self.data.parcels then
+    self.data.parcels = Parcel.loadConfig(self.root)
+    self.data.pstats = Parcel.loadStats(self.root)
+  end
 end
 
 -- Saves the config and has the service apply it.
@@ -475,10 +486,10 @@ function Console:fillItems(fd)
     counts[it.name] = (counts[it.name] or 0) + it.count
   end
   local present = {}
-  for _, spec in ipairs(Parcel.parseItems(kind, fd.f.text) or {}) do present[spec.item] = true end
+  for _, spec in ipairs(Parcel.parseItems(kind, fd.f.text) or {}) do present[util.shortName(spec.item):lower()] = true end
   local added = {}
   for _, name in ipairs(order) do
-    if not present[name] then
+    if not present[util.shortName(name):lower()] then
       added[#added + 1] = kind == "withdraw" and (name .. "=" .. counts[name]) or name
     end
   end
@@ -582,7 +593,7 @@ end
 function Console:openPicker(fd)
   local items = {}
   if fd.pick == "inventory" then
-    for _, p in ipairs(self.data.peripherals or {}) do
+    for _, p in ipairs(self:refreshPeripherals()) do
       items[#items + 1] = { label = util.fit(p.name, 28) .. util.rfit(p.size, 5) .. "  " .. p.role .. (p.access and (" " .. p.access) or ""), value = p.name }
     end
   else
@@ -801,14 +812,18 @@ function Console:drawSettings(y1, y2)
   self.hint = "Presets: comma separated. Save applies at once."
 end
 
+-- The log, re-read only when the file has grown or shrunk.
 function Console:logLines()
   local path = fs.combine(self.root, "data/log")
   if not fs.exists(path) then return {} end
+  local size = fs.getSize(path)
+  if self.logCache and self.logCache.size == size then return self.logCache.lines end
   local h = fs.open(path, "r")
   local s = h.readAll()
   h.close()
   local lines = {}
   for line in s:gmatch("[^\n]+") do lines[#lines + 1] = line end
+  self.logCache = { size = size, lines = lines }
   return lines
 end
 
@@ -848,7 +863,7 @@ function Console:onKey(code)
   elseif code == keys.enter then
     if self.form and not self.picker then
       local last = self.form.fields[#self.form.fields]
-      if f == last.f then self:saveForm() else self.ui:focusNext() end
+      if f and last.f and f == last.f then self:saveForm() else self.ui:focusNext() end
     elseif f then
       self.ui.focus = nil
     end
@@ -871,28 +886,43 @@ function Console:scroll(dir)
   end
 end
 
+-- Draws only after something that can change the picture: input, the
+-- refresh timer, or a change in storage. Every other event on the computer
+-- (the screens' chest polls, for one) passes through untouched.
 function Console:run()
   self:refresh()
   local timer = os.startTimer(REFRESH)
   local due = os.clock() + REFRESH
+  local dirty = true
   while self.running do
-    self:draw()
+    if dirty then
+      self:draw()
+      dirty = false
+    end
     local ev = { os.pullEvent() }
     local e = ev[1]
     if e == "mouse_click" then
       self.ui:tap(ev[3], ev[4])
+      dirty = true
     elseif e == "mouse_scroll" then
       self:scroll(ev[2])
+      dirty = true
     elseif e == "key" then
       self:onKey(ev[2])
+      dirty = true
     elseif e == "char" then
       self:onChar(ev[2])
+      dirty = true
     elseif e == "term_resize" then
       self.ui:resize()
+      dirty = true
     elseif e == "timer" and (ev[2] == timer or os.clock() >= due) then
-      if self.page ~= "log" and not self.form and not self.picker then self:refresh() end
+      if not self.form and not self.picker then self:refresh() end
       timer = os.startTimer(REFRESH)
       due = os.clock() + REFRESH
+      dirty = true
+    elseif e == "warehouse_event" and self.page == "status" then
+      dirty = true
     end
   end
   self.ui:begin(colors.black)

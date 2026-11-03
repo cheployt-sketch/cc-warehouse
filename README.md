@@ -192,7 +192,7 @@ Every method raises an error with a readable message when the service refuses (`
 Rules worth knowing:
 
 - `withdraw` takes from the smallest stacks first, so partial stacks disappear and full ones stay full. It never gives more than is stored, and reports `message` when the target filled up.
-- `deposit` tops up partial stacks (fullest first) before opening new slots. When storage is full the leftovers stay in the source and `message` says so.
+- `deposit` tops up partial stacks (fullest first) before opening new slots. When storage is full the leftovers stay in the source and `message` says so. Its `item` filter takes an id, a short name (`oak_planks`) or a display-style spelling, like parcel task lines.
 - Operations run one at a time in the order they arrive, from every app and screen together, so two apps cannot race for the same stack.
 - Apps on the warehouse computer need no setup. Apps elsewhere: run `wh pair <key>` once on that computer (key from `warehouse key` on the warehouse computer, or `warehouse key disk` plus `wh pair disk` with a floppy). The `/warehouse` folder must be installed there too, since the client library uses its crypto.
 - Change events: local apps get them as a `warehouse_event` event (`os.pullEvent("warehouse_event")` works too); over rednet `pullEvent` subscribes by itself.

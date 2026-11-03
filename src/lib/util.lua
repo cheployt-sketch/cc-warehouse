@@ -74,6 +74,16 @@ function U.clamp(n, lo, hi)
   return n
 end
 
+-- Does an item spec mean this stack? The spec may be the item key, the id,
+-- the id without its namespace ("oak_planks") or a display-style spelling
+-- ("Oak Planks").
+function U.itemMatches(spec, name, key)
+  if spec == key or spec == name then return true end
+  local want = tostring(spec):lower():gsub("[%s%-]+", "_")
+  if want:find(":", 1, true) then return want == name:lower() end
+  return want == U.shortName(name):lower()
+end
+
 -- Case-insensitive plain-text search.
 function U.contains(hay, needle)
   if needle == nil or needle == "" then return true end

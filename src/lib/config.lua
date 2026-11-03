@@ -103,7 +103,9 @@ end
 
 -- Every inventory on the network with its role: "storage", "access"
 -- (an access point chest), "excluded" or "free" (anything apps may use).
-function C.peripherals(cfg)
+-- Sizes cost a peripheral call each (done together, so one tick in all);
+-- pass withSizes = false when they are not needed.
+function C.peripherals(cfg, withSizes)
   local access, exclude, names = {}, {}, {}
   for _, ap in ipairs(cfg.access or {}) do access[ap.chest] = ap.name or ap.monitor end
   for _, n in ipairs(cfg.storage.exclude or {}) do exclude[n] = true end
@@ -127,17 +129,26 @@ function C.peripherals(cfg)
           end
         end
       end
-      local ok, size = pcall(peripheral.call, name, "size")
-      list[#list + 1] = { name = name, type = ptype, size = ok and size or 0, role = role, access = access[name] }
+      list[#list + 1] = { name = name, type = ptype, size = 0, role = role, access = access[name] }
     end
   end
   table.sort(list, function(a, b) return a.name < b.name end)
+  if withSizes ~= false and #list > 0 then
+    local fns = {}
+    for _, p in ipairs(list) do
+      fns[#fns + 1] = function()
+        local ok, size = pcall(peripheral.call, p.name, "size")
+        p.size = ok and tonumber(size) or 0
+      end
+    end
+    for i = 1, #fns, 32 do parallel.waitForAll(table.unpack(fns, i, math.min(#fns, i + 31))) end
+  end
   return list
 end
 
 function C.storageNames(cfg)
   local out = {}
-  for _, p in ipairs(C.peripherals(cfg)) do
+  for _, p in ipairs(C.peripherals(cfg, false)) do
     if p.role == "storage" then out[#out + 1] = p.name end
   end
   return out

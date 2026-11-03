@@ -568,7 +568,7 @@ function Index:deposit(from, opts)
     local sources, unknown = {}, {}
     for slot, it in pairs(list) do
       local key = util.keyOf(it.name, it.nbt)
-      if (not want or want[slot]) and (not opts.item or opts.item == key or opts.item == it.name) then
+      if (not want or want[slot]) and (not opts.item or util.itemMatches(opts.item, it.name, key)) then
         sources[#sources + 1] = { slot = slot, key = key, count = it.count }
         if not self.details[key] and not unknown[key] then unknown[key] = slot end
       end

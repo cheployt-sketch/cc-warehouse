@@ -38,7 +38,7 @@ end
 
 local function step(self, t, ...)
   local ok, param = coroutine.resume(t.co, ...)
-  if not ok then error(param, 0) end
+  if not ok then error(t.name .. ": " .. tostring(param), 0) end
   t.filter = param
   t.started = true
   if coroutine.status(t.co) == "dead" then self:remove(t.name) end
