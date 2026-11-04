@@ -2,7 +2,8 @@
 --
 -- Pages: Recipes (every recipe with its mode, what it made and what it is
 -- doing, in folders; click one to change it: name, mode, rate, folder,
--- the steps, with Scan buttons that read a step off the recipe chest, and
+-- the steps, with Scan buttons that read a step off the recipe chest, a
+-- window per factory step for its entry and collection inventories, and
 -- Run, Order, Stop, Remove), Setup (the turtle, the chests and the
 -- monitor, with pickers that say what each one is used for and list the
 -- free ones first) and Log. Everything is clicked; text fields take typing, Tab moves on,
@@ -90,7 +91,7 @@ function Console:draw()
     local active = self.page == pg[1]
     x = ui:button(x, 2, pg[2], function()
       self.page = pg[1]
-      self.form, self.picker, self.ui.focus = nil, nil, nil
+      self.form, self.sub, self.picker, self.ui.focus = nil, nil, nil, nil
       if pg[1] == "log" then self.logOffset = 0 end
     end, { bg = active and ui:col("blue", colors.black) or bar, fg = active and colors.white or ui:col("lightGray", colors.white) })
   end
@@ -98,6 +99,8 @@ function Console:draw()
   local y1, y2 = 3, h - 1
   if self.picker then
     self:drawPicker(y1, y2)
+  elseif self.sub then
+    self:drawFactory(y1, y2)
   elseif self.form and self.form.kind == "folder" then
     self:drawFolderForm(y1, y2)
   elseif self.form then
@@ -276,7 +279,97 @@ function Console:scanStep(kind)
   end
   local steps = self.form.rec.steps
   steps[#steps + 1] = step
-  self:say("Step " .. #steps .. ": " .. Recipes.describe(step) .. ". Save to keep it.")
+  if step.kind == "factory" then
+    self:openFactory(#steps)
+    self:say("Step " .. #steps .. ": " .. Recipes.describe(step) .. ". Now say where it goes and comes from.")
+  else
+    self:say("Step " .. #steps .. ": " .. Recipes.describe(step) .. ". Save to keep it.")
+  end
+end
+
+-- The factory window: where each input of the step goes and where its
+-- results come from. It edits the step in the open recipe form; Save the
+-- recipe to keep it.
+function Console:openFactory(i)
+  local step = self.form and self.form.rec.steps[i]
+  if not step or step.kind ~= "factory" then return end
+  local sub = { index = i, step = step, inputs = {}, outputs = {} }
+  for k, e in ipairs(step.inputs or {}) do sub.inputs[k] = UI.newField(e.inventory or "", { max = 40 }) end
+  for k, name in ipairs(step.outputs or {}) do sub.outputs[k] = UI.newField(name, { max = 40 }) end
+  if #sub.outputs == 0 then sub.outputs[1] = UI.newField("", { max = 40 }) end
+  sub.batch = UI.newField(step.batch or "", { max = 4, filter = "%d" })
+  self.sub = sub
+  self.ui.focus = sub.inputs[1] or sub.outputs[1]
+end
+
+function Console:drawFactory(y1, y2)
+  local ui, w = self.ui, self.ui.w
+  local sub = self.sub
+  local step = sub.step
+  local gray = ui:col("lightGray", colors.white)
+  ui:text(1, y1, util.fit(" Step " .. sub.index .. ": factory. Inputs go to, results come from:", w), ui:col("yellow"))
+  local y = y1 + 1
+  local function row(label, arrow, field, fw, extra)
+    ui:text(2, y, util.fit(label, 20))
+    ui:text(23, y, arrow, gray)
+    ui:field(26, y, fw, field)
+    local px = ui:button(26 + fw + 1, y, "Pick", function()
+      self:openPicker("inventory", function(v) field.text, field.cursor = v, #v + 1 end)
+    end) + 1
+    if extra then extra(px, y) end
+    y = y + 1
+  end
+  for k, e in ipairs(step.inputs or {}) do
+    if y >= y2 - 2 then
+      ui:text(2, y, util.fit("+" .. (#step.inputs - k + 1) .. " more inputs: fewer kinds per step, please", w - 1), gray)
+      y = y + 1
+      break
+    end
+    row(e.count .. " " .. e.displayName, "->", sub.inputs[k], 19)
+  end
+  for k, field in ipairs(sub.outputs) do
+    if y >= y2 - 1 then break end
+    row(k == 1 and (step.result.count .. " " .. step.result.displayName) or "and more", "<-", field, 15, function(px, yy)
+      if k > 1 then ui:button(px, yy, "x", function() table.remove(sub.outputs, k) end, { w = 3, bg = ui:col("red", colors.black) }) end
+    end)
+  end
+  if #sub.outputs < 3 and y < y2 - 1 then
+    ui:button(26, y, "+ collection point", function() sub.outputs[#sub.outputs + 1] = UI.newField("", { max = 40 }) end)
+    y = y + 1
+  end
+  ui:text(2, y2 - 1, "Units per batch")
+  ui:field(18, y2 - 1, 5, sub.batch)
+  ui:text(24, y2 - 1, util.fit("blank: what a stack of each input allows", w - 24), gray)
+  local x = ui:button(2, y2, "Save", function() self:saveFactory() end, { bg = ui:col("green", colors.black) }) + 1
+  ui:button(x, y2, "Cancel", function() self.sub, self.ui.focus = nil, nil end)
+  self.hint = "Inputs go to their entry inventories; all that then turns up at a collection point is stored."
+end
+
+function Console:saveFactory()
+  local sub = self.sub
+  local step = sub.step
+  for k, e in ipairs(step.inputs or {}) do
+    local v = trim(sub.inputs[k] and sub.inputs[k].text)
+    if v == "" then
+      self:say("Pick the entry inventory for " .. tostring(e.displayName), true)
+      return
+    end
+    e.inventory = v
+  end
+  local outputs = {}
+  for _, field in ipairs(sub.outputs) do
+    local v = trim(field.text)
+    if v ~= "" then outputs[#outputs + 1] = v end
+  end
+  if #outputs == 0 then
+    self:say("Pick at least one collection inventory", true)
+    return
+  end
+  step.outputs = outputs
+  local batch = tonumber(sub.batch.text)
+  step.batch = (batch and batch >= 1) and math.floor(batch) or nil
+  self.sub, self.ui.focus = nil, nil
+  self:say("Step " .. sub.index .. " set up. Save the recipe to keep it.")
 end
 
 function Console:drawForm(y1, y2)
@@ -306,15 +399,16 @@ function Console:drawForm(y1, y2)
   y = y + 1
   ui:text(2, y, "Keep")
   ui:field(7, y, 7, f.keep)
-  ui:text(15, y, "in the vault  (mode keep)", ui:col("lightGray", colors.white))
+  ui:text(15, y, "in the vault (mode keep)", ui:col("lightGray", colors.white))
+  -- The folder the recipe is filed in; the picker changes it.
+  ui:button(41, y, r.folder and ("in " .. r.folder) or "no folder", function()
+    self:openPicker("folder", function(v) r.folder = v ~= "" and v or nil end)
+  end, { w = w - 40, align = "left" })
   y = y + 1
   ui:text(2, y, "Steps", ui:col("yellow"))
   local x = ui:button(9, y, "Scan craft", function() self:scanStep("craft") end) + 1
   x = ui:button(x, y, "Scan smelt", function() self:scanStep("smelt") end) + 1
-  -- The folder the recipe is filed in; the picker changes it.
-  ui:button(x, y, r.folder and ("in " .. r.folder) or "no folder", function()
-    self:openPicker("folder", function(v) r.folder = v ~= "" and v or nil end)
-  end, { w = w - x + 1, align = "left" })
+  ui:button(x, y, "Scan factory", function() self:scanStep("factory") end)
   y = y + 1
   if #r.steps == 0 then
     ui:text(3, y, "none yet: lay the first step out in the recipe chest and scan it", ui:col("lightGray", colors.white))
@@ -326,7 +420,13 @@ function Console:drawForm(y1, y2)
       y = y + 1
       break
     end
-    ui:text(2, y, util.fit(i .. ". " .. Recipes.describe(step), w - 15), step.result and colors.white or ui:col("orange"))
+    local isFactory = step.kind == "factory"
+    local ready = step.result ~= nil and Recipes.factoryProblem(step) == nil
+    ui:text(2, y, util.fit(i .. ". " .. Recipes.describe(step), isFactory and (w - 19) or (w - 15)), ready and colors.white or ui:col("orange"))
+    if isFactory then
+      -- its window: entry and collection inventories
+      ui:button(w - 16, y, "=", function() self:openFactory(i) end, { w = 3, bg = ui:col("blue", colors.black) })
+    end
     local bx = w - 12
     bx = ui:button(bx, y, "^", function()
       if i > 1 then r.steps[i], r.steps[i - 1] = r.steps[i - 1], r.steps[i] end
@@ -409,7 +509,7 @@ function Console:drawForm(y1, y2)
       end, { bg = ui:col("red", colors.black) })
     end
   end
-  self.hint = "Scan reads the recipe chest's top left 3x3 (result in slot 9). Esc: back."
+  self.hint = "Scan reads the chest's top left 3x3 (result in slot 9); = opens a factory step's window. Esc: back."
 end
 
 -- Setup ------------------------------------------------------------------
@@ -592,6 +692,8 @@ function Console:onKey(code)
   if code == keys.escape then
     if self.picker then
       self.picker = nil
+    elseif self.sub then
+      self.sub, self.ui.focus = nil, nil
     elseif self.form then
       self.form, self.ui.focus = nil, nil
     elseif self.standalone and not f then

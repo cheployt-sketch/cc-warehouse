@@ -10,8 +10,9 @@
 --   crafter ui                the control panel in this tab (the service runs elsewhere)
 --   crafter status            the turtle, the smelter and every recipe
 --   crafter list              the recipes and their stats
---   crafter scan [smelt]      what the recipe chest holds, as a step
---   crafter add <name> [smelt]   a new recipe from what the recipe chest holds
+--   crafter scan [smelt|factory]      what the recipe chest holds, as a step
+--   crafter add <name> [smelt|factory]   a new recipe from what the recipe chest holds
+--                             (a factory step still needs its inventories, set on the panel)
 --   crafter order <recipe> <n>       make n of what the recipe makes
 --   crafter run <recipe> [times]     run the recipe that many times
 --   crafter stop <recipe>            stop it (orders, run and mode)
@@ -45,8 +46,8 @@ local function usage()
   print("  " .. NAME .. " ui         the control panel in this tab")
   print("  " .. NAME .. " status     turtle, smelter and recipes")
   print("  " .. NAME .. " list       the recipes")
-  print("  " .. NAME .. " scan [smelt]        what the recipe chest holds, as a step")
-  print("  " .. NAME .. " add <name> [smelt]  a new recipe from the recipe chest")
+  print("  " .. NAME .. " scan [smelt|factory]        what the recipe chest holds, as a step")
+  print("  " .. NAME .. " add <name> [smelt|factory]  a new recipe from the recipe chest")
   print("  " .. NAME .. " order <recipe> <n>")
   print("  " .. NAME .. " run <recipe> [times]")
   print("  " .. NAME .. " stop <recipe>")

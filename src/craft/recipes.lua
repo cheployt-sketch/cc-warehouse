@@ -15,7 +15,18 @@
 --       { kind = "craft", grid = { [1] = { key, name, displayName, slot } ... [9] },
 --         result = { key, name, displayName, count, maxCount } },  -- nil until learned
 --       { kind = "smelt", input = { key, name, displayName, slot }, result = ... },
+--       { kind = "factory", inputs = { { key, name, displayName, count, inventory } ... },
+--         outputs = { "minecraft:chest_32", ... }, batch = 16, result = ... },
 --     } }
+--
+-- A factory step is for machines (Create's, say): each input goes, count
+-- per unit, to its own entry inventory; whatever then turns up in the
+-- collection inventories (all but the inputs themselves) is stored, and
+-- the result among it counts towards the unit. Several entry and
+-- collection inventories are fine, and what happens between them is the
+-- machines' business. batch caps how many units go in at once (blank:
+-- what a stack of each input allows). Its result is read off the recipe
+-- chest with the inputs, never learned.
 --
 -- grid holds the 3x3 crafting grid, cell 1 top left, 9 bottom right, one
 -- item per cell per craft, as in a crafting table. A step's result is what
@@ -56,7 +67,7 @@ end
 -- gives { displayName, maxCount }. kind: "craft" or "smelt". Returns the
 -- step, or nil and why.
 function R.scan(inv, details, kind)
-  kind = kind == "smelt" and "smelt" or "craft"
+  if kind ~= "smelt" and kind ~= "factory" then kind = "craft" end
   local bySlot = {}
   for _, it in ipairs(inv.items or {}) do bySlot[it.slot] = it end
   local cells, resultSlot = R.cellSlots(inv.size)
@@ -76,6 +87,26 @@ function R.scan(inv, details, kind)
       end
     end
     if n == 0 then return nil, "nothing in the 3x3 (top left of the chest)" end
+  elseif kind == "factory" then
+    -- every stack in the 3x3 is an input: its count is what one unit takes
+    step.inputs = {}
+    local byKey = {}
+    for _, slot in ipairs(cells) do
+      local it = bySlot[slot]
+      if it then
+        local e = byKey[it.key]
+        if not e then
+          e = entry(it)
+          e.count = 0
+          byKey[it.key] = e
+          step.inputs[#step.inputs + 1] = e
+        end
+        e.count = e.count + it.count
+        n = n + 1
+      end
+    end
+    if n == 0 then return nil, "nothing in the 3x3 (top left of the chest): lay the inputs out, as many as one unit takes" end
+    step.outputs = {}
   else
     for _, slot in ipairs(cells) do
       local it = bySlot[slot]
@@ -92,7 +123,20 @@ function R.scan(inv, details, kind)
     local d = details(res.key) or {}
     step.result = { key = res.key, name = res.name, displayName = d.displayName or util.titleCase(res.name), count = res.count, maxCount = d.maxCount or 64 }
   end
+  if kind == "factory" and not step.result then return nil, "put what one unit makes in slot 9 (top right): a factory step cannot learn its result" end
   return step
+end
+
+-- Why a factory step cannot run yet (its inventories are set on the
+-- panel), or nil.
+function R.factoryProblem(step)
+  if step.kind ~= "factory" then return nil end
+  if #(step.inputs or {}) == 0 then return "no inputs" end
+  for _, e in ipairs(step.inputs) do
+    if type(e.inventory) ~= "string" or e.inventory == "" then return "entry inventory for " .. tostring(e.displayName) .. " not set" end
+  end
+  if #(step.outputs or {}) == 0 then return "no collection inventory set" end
+  return nil
 end
 
 -- The distinct ingredients of a step: { { key, name, displayName, cells } }.
@@ -100,6 +144,10 @@ function R.ingredients(step)
   local out, byKey = {}, {}
   if step.kind == "smelt" then
     if step.input then out[1] = { key = step.input.key, name = step.input.name, displayName = step.input.displayName, cells = 1 } end
+    return out
+  end
+  if step.kind == "factory" then
+    for _, e in ipairs(step.inputs or {}) do out[#out + 1] = { key = e.key, name = e.name, displayName = e.displayName, cells = e.count } end
     return out
   end
   for cell = 1, 9 do
@@ -121,7 +169,8 @@ end
 function R.describe(step)
   local parts = {}
   for _, ing in ipairs(R.ingredients(step)) do parts[#parts + 1] = ing.cells .. " " .. ing.displayName end
-  local s = (step.kind == "smelt" and "Smelt " or "Craft ") .. table.concat(parts, " + ")
+  local verb = step.kind == "smelt" and "Smelt " or step.kind == "factory" and "Factory " or "Craft "
+  local s = verb .. table.concat(parts, " + ")
   if step.result then
     s = s .. " -> " .. step.result.count .. " " .. step.result.displayName
   else
@@ -147,6 +196,18 @@ end
 -- cell gets one stack at most, and the results must fit the turtle's free
 -- slots. details(key) -> { maxCount }.
 function R.maxBatch(step, details)
+  if step.kind == "factory" then
+    -- a stack of each input at most, or the step's own cap
+    local n = math.huge
+    for _, e in ipairs(step.inputs or {}) do
+      local d = details(e.key)
+      n = math.min(n, math.max(1, math.floor(((d and d.maxCount) or 64) / math.max(1, e.count))))
+    end
+    local cap = tonumber(step.batch)
+    if cap and cap >= 1 then n = math.min(n, math.floor(cap)) end
+    if n == math.huge then n = 1 end
+    return math.max(1, n)
+  end
   if step.kind ~= "craft" then return math.huge end
   local n = 64
   for _, ing in ipairs(R.ingredients(step)) do

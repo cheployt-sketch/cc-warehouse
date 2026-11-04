@@ -9,6 +9,10 @@
 --   - A smelt unit feeds the smelter's input chest from the vault and
 --     notes what came out of its finish chest, which the engine empties
 --     into the vault every few seconds whether a smelt is running or not.
+--   - A factory unit (machines, Create's say) sends a batch of inputs to
+--     the step's entry inventories and stores whatever turns up in its
+--     collection inventories, counting the result, until the batch is in.
+--     One recipe at a time uses a given set of inventories.
 --   - A learn unit crafts (or smelts) once to find out what a step makes,
 --     for steps laid out without their result.
 --
@@ -523,7 +527,13 @@ function E:unit(rec, st)
   if self:advance(rec, st) then return true end
   local step = rec.steps[st.run.step]
   local did
-  if step.kind == "smelt" then did = self:smeltUnit(rec, st, step) else did = self:craftBatch(rec, st, step, false) end
+  if step.kind == "smelt" then
+    did = self:smeltUnit(rec, st, step)
+  elseif step.kind == "factory" then
+    did = self:factoryUnit(rec, st, step)
+  else
+    did = self:craftBatch(rec, st, step, false)
+  end
   if st.run and not st.problem then self:advance(rec, st) end
   return did
 end
@@ -532,6 +542,10 @@ end
 -- by smelting one item and watching the finish chest.
 function E:learn(rec, st, i)
   local step = rec.steps[i]
+  if step.kind == "factory" then
+    self:fail(rec, st, "step " .. i .. " has no result: scan it again with what one unit makes in slot 9")
+    return true
+  end
   if step.kind == "craft" then
     st.learn = { step = i }
     return self:craftBatch(rec, st, step, true)
@@ -753,6 +767,131 @@ function E:smeltUnit(rec, st, step)
   return did
 end
 
+-- Factory steps ----------------------------------------------------------
+
+-- Another recipe in the middle of a factory batch on any of this step's
+-- inventories, by name, or nil.
+function E:factoryBusy(rec, step)
+  local mine = {}
+  for _, e in ipairs(step.inputs or {}) do mine[e.inventory] = true end
+  for _, name in ipairs(step.outputs or {}) do mine[name] = true end
+  for _, other in ipairs(self.recipes) do
+    local ost = other ~= rec and self.state.recipes[other.id]
+    local f = ost and ost.run and ost.run.factory
+    local os_ = f and other.steps[f.step]
+    if os_ and os_.kind == "factory" then
+      for _, e in ipairs(os_.inputs or {}) do
+        if mine[e.inventory] then return other.name end
+      end
+      for _, name in ipairs(os_.outputs or {}) do
+        if mine[name] then return other.name end
+      end
+    end
+  end
+  return nil
+end
+
+-- Moves what the machines put in the collection inventories into the
+-- vault: everything but the step's own inputs, so a chest that is both
+-- an entry and a collection point keeps what was sent to it. Returns
+-- what came, by key.
+function E:collectFactory(step)
+  local inputKeys = {}
+  for _, e in ipairs(step.inputs or {}) do inputKeys[e.key] = true end
+  local got, seen = {}, {}
+  for _, name in ipairs(step.outputs or {}) do
+    if not seen[name] then
+      seen[name] = true
+      local ok, inv = pcall(self.vault.inventory, name)
+      if ok and type(inv) == "table" then
+        local slots = {}
+        for _, it in ipairs(inv.items or {}) do
+          if not inputKeys[it.key] then slots[#slots + 1] = it.slot end
+        end
+        if #slots > 0 then
+          local ok2, _, items = pcall(self.vault.deposit, name, { slots = slots, recent = false })
+          if ok2 and type(items) == "table" then
+            for k, n in pairs(items) do got[k] = (got[k] or 0) + n end
+          end
+        end
+      end
+    end
+  end
+  return got
+end
+
+-- One pass at a factory step: send the batch's inputs to their entry
+-- inventories (what is missing is sent when it turns up), then collect
+-- from the collection inventories every COLLECT seconds until the
+-- batch's results are in. Machines that give nothing for smeltStall
+-- seconds are reported, not failed.
+function E:factoryUnit(rec, st, step)
+  local run = st.run
+  local problem = Recipes.factoryProblem(step)
+  if problem then
+    st.waiting = "step " .. run.step .. ": " .. problem .. " (its window on the panel)"
+    return false
+  end
+  local f = run.factory
+  if not f or f.step ~= run.step then
+    local busy = self:factoryBusy(rec, step)
+    if busy then
+      st.waiting = "waiting for the machines (" .. busy .. " uses them)"
+      return false
+    end
+    local left = run.ops[run.step] - run.done[run.step]
+    f = { step = run.step, n = math.max(1, math.min(left, Recipes.maxBatch(step, function(k) return self:details(k) end))), fed = {}, got = 0, lastOut = self.clock(), collectedAt = -1000 }
+    run.factory = f
+    self.log(rec.name .. ": step " .. run.step .. ", " .. f.n .. " unit(s) to the machines")
+  end
+  -- after a reboot the clock starts over
+  if f.lastOut > self.clock() then f.lastOut = self.clock() end
+  if f.collectedAt > self.clock() then f.collectedAt = -1000 end
+  local did, allFed, missing = false, true, nil
+  for k, e in ipairs(step.inputs) do
+    local owed = e.count * f.n - (f.fed[k] or 0)
+    if owed > 0 then
+      local n = self:supply(e, owed, e.inventory, nil, false)
+      if n > 0 then
+        f.fed[k] = (f.fed[k] or 0) + n
+        did = true
+      end
+      if (f.fed[k] or 0) < e.count * f.n then
+        allFed = false
+        missing = missing or e.displayName
+      end
+    end
+  end
+  if self.clock() - f.collectedAt >= E.COLLECT then
+    f.collectedAt = self.clock()
+    local got = self:collectFactory(step)
+    local n = got[step.result.key] or 0
+    if n > 0 then
+      f.got = f.got + n
+      f.lastOut = self.clock()
+      if run.step == #rec.steps then run.made = run.made + n end
+      did = true
+    end
+  end
+  if f.got >= math.max(1, step.result.count) * f.n then
+    run.done[run.step] = run.done[run.step] + f.n
+    st.stats.factory = (st.stats.factory or 0) + f.n
+    run.factory = nil
+    st.waiting = nil
+    self:changed()
+    return true
+  end
+  if not allFed then
+    st.waiting = "waiting for " .. tostring(missing)
+  elseif self.clock() - f.lastOut > self.cfg.smeltStall then
+    st.waiting = "machines: nothing came out for " .. math.floor((self.clock() - f.lastOut) / 60) .. " min"
+  else
+    st.waiting = nil
+  end
+  if did then self:changed() end
+  return did
+end
+
 -- Empties the smelter's finish chest into the vault and credits what came
 -- out to the recipe smelting it (or learning from it).
 function E:collectSmelter()
@@ -886,7 +1025,7 @@ function E:summary(rec)
   local s = {
     id = rec.id, name = rec.name, mode = rec.mode, count = rec.count, rateCount = rec.rateCount, rateSeconds = rec.rateSeconds,
     keepCount = rec.keepCount, folder = rec.folder, steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
-    runs = st.stats.runs, made = st.stats.made + (st.run and st.run.made or 0), crafts = st.stats.crafts, smelted = st.stats.smelted,
+    runs = st.stats.runs, made = st.stats.made + (st.run and st.run.made or 0), crafts = st.stats.crafts, smelted = st.stats.smelted, factory = st.stats.factory or 0,
     errors = st.stats.errors, behind = st.stats.behind, lastRun = st.stats.lastRun, lastMessage = st.stats.lastMessage,
   }
   local last = Recipes.lastResult(rec)
@@ -907,6 +1046,9 @@ function E:summary(rec)
     elseif step.kind == "smelt" then
       local sm = run.smelt or { got = 0 }
       text = string.format("smelting %d/%d", sm.got, run.ops[run.step] * math.max(1, step.result.count))
+    elseif step.kind == "factory" then
+      local per = math.max(1, step.result.count)
+      text = string.format("factory %d/%d", run.done[run.step] * per + (run.factory and run.factory.got or 0), run.ops[run.step] * per)
     else
       text = string.format("crafting %d/%d", run.done[run.step], run.ops[run.step])
     end

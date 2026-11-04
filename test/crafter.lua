@@ -170,8 +170,14 @@ local function newVault()
     for s in pairs(src.slots) do slots[#slots + 1] = s end
     table.sort(slots)
     if #slots == 0 then return 0, {}, "nothing to store" end
+    local slotSet
+    if opts.slots then
+      slotSet = {}
+      for _, s in ipairs(opts.slots) do slotSet[s] = true end
+    end
     for _, s in ipairs(slots) do
-      if (not opts.slot or opts.slot == s) and budget > moved then
+      local wanted = (not opts.slot or opts.slot == s) and (not slotSet or slotSet[s])
+      if wanted and budget > moved then
         local st = src.slots[s]
         if not opts.item or st.name == opts.item then
           if sim.full then
@@ -299,6 +305,41 @@ local function smelt(vault, smeltIn, smeltOut, rate)
   return n
 end
 
+-- Machines (a factory step's world): each call turns up to `rate` units
+-- of spec.inputs ({ inv, item, count } each) into spec.outputs.
+local function countOf(inv, name)
+  local n = 0
+  for _, st in pairs(inv.slots) do
+    if st.name == name then n = n + st.count end
+  end
+  return n
+end
+
+local function take(inv, name, count)
+  for s, st in pairs(inv.slots) do
+    if count <= 0 then break end
+    if st.name == name then
+      local m = math.min(st.count, count)
+      st.count = st.count - m
+      count = count - m
+      if st.count <= 0 then inv.slots[s] = nil end
+    end
+  end
+end
+
+local function factory(vault, spec, rate)
+  local n = 0
+  while n < (rate or 1) do
+    for _, i in ipairs(spec.inputs) do
+      if countOf(vault.sim.invs[i.inv], i.item) < i.count then return n end
+    end
+    for _, i in ipairs(spec.inputs) do take(vault.sim.invs[i.inv], i.item, i.count) end
+    for _, o in ipairs(spec.outputs) do insert(vault.sim.invs[o.inv], o.item, o.count) end
+    n = n + 1
+  end
+  return n
+end
+
 ---------------------------------------------------------------------------
 -- Helpers
 ---------------------------------------------------------------------------
@@ -397,6 +438,45 @@ local PICKAXE = function(r)
 end
 
 local function summary(w, id) return w.eng:summary(w.eng:get(id)) end
+
+-- Scheduler passes with the machines working in between.
+local function fticks(w, n, spec, rate)
+  for _ = 1, n do
+    w.eng:tick()
+    T.clock = T.clock + 1
+    T.epoch = T.epoch + 1000
+    factory(w.vault, spec, rate)
+  end
+end
+
+local function untilF(w, spec, rate, cond, max)
+  for _ = 1, max or 100 do
+    if cond() then return true end
+    fticks(w, 1, spec, rate)
+  end
+  return cond()
+end
+
+-- A factory step: 2 raw iron and a log go to two entry chests, a block
+-- (and some gravel the machine spits out) comes back in a third.
+local function factoryWorld(stock)
+  local w = world({ stock = stock or { ["minecraft:raw_iron"] = 30, ["minecraft:oak_log"] = 10 } })
+  w.vault.sim.invs["fin1"], w.vault.sim.invs["fin2"], w.vault.sim.invs["fout"] = newInv(27), newInv(27), newInv(27)
+  local step = {
+    kind = "factory",
+    inputs = {
+      { key = "minecraft:raw_iron", name = "minecraft:raw_iron", displayName = "Raw Iron", count = 2, inventory = "fin1" },
+      { key = "minecraft:oak_log", name = "minecraft:oak_log", displayName = "Oak Log", count = 1, inventory = "fin2" },
+    },
+    outputs = { "fout" },
+    result = { key = "minecraft:iron_block", name = "minecraft:iron_block", displayName = "Iron Block", count = 1, maxCount = 64 },
+  }
+  local machine = {
+    inputs = { { inv = "fin1", item = "minecraft:raw_iron", count = 2 }, { inv = "fin2", item = "minecraft:oak_log", count = 1 } },
+    outputs = { { inv = "fout", item = "minecraft:iron_block", count = 1 }, { inv = "fout", item = "minecraft:gravel", count = 1 } },
+  }
+  return w, step, machine
+end
 
 ---------------------------------------------------------------------------
 -- The model
@@ -870,6 +950,105 @@ test("keep: makes planks until the vault holds the count, rests, and goes again 
   w.vault.sim.stock["minecraft:oak_planks"] = 0
   ticks(w, 5)
   eq(w.vault.count("minecraft:oak_planks"), 0, "off means off")
+end)
+
+test("a factory step: inputs go to their entry inventories, results are collected from the collection ones", function()
+  local w, step, machine = factoryWorld()
+  local rec = w.eng:add({ name = "Blocks", steps = { step } })
+  w.eng:order(rec.id, 3)
+  fticks(w, 1, machine, 0)
+  eq(countOf(w.vault.sim.invs["fin1"], "minecraft:raw_iron"), 6, "6 raw iron sent to the first entry chest")
+  eq(countOf(w.vault.sim.invs["fin2"], "minecraft:oak_log"), 3, "3 logs to the second")
+  check(summary(w, rec.id).text:find("factory 0/3", 1, true), "progress", summary(w, rec.id).text)
+  check(untilF(w, machine, 1, function() return summary(w, rec.id).runs == 1 end, 40), "done", summary(w, rec.id).text)
+  eq(w.vault.sim.stock["minecraft:iron_block"], 3, "3 blocks in the vault")
+  eq(w.vault.sim.stock["minecraft:gravel"], 3, "the gravel too: everything that comes out is stored")
+  eq(w.vault.sim.stock["minecraft:raw_iron"], 24, "24 raw iron left")
+  eq(w.vault.sim.stock["minecraft:oak_log"], 7, "7 logs left")
+  eq(summary(w, rec.id).factory, 3, "3 units through the machines")
+  eq(summary(w, rec.id).made, 3, "made 3")
+  eq(total(w.vault.sim.invs["fout"]), 0, "the collection chest is empty")
+end)
+
+test("a factory step waits for its inputs and reports machines that give nothing", function()
+  local w, step, machine = factoryWorld({ ["minecraft:raw_iron"] = 30 })
+  local rec = w.eng:add({ name = "Blocks", steps = { step } })
+  w.eng:order(rec.id, 2)
+  fticks(w, 2, machine, 1)
+  check(summary(w, rec.id).text:find("waiting for Oak Log", 1, true), "waits for the logs", summary(w, rec.id).text)
+  eq(countOf(w.vault.sim.invs["fin1"], "minecraft:raw_iron"), 4, "what it had was sent")
+  w.vault.sim.stock["minecraft:oak_log"] = 5
+  check(untilF(w, machine, 1, function() return summary(w, rec.id).runs == 1 end, 40), "goes on once the logs are there")
+  eq(w.vault.sim.stock["minecraft:iron_block"], 2, "2 blocks")
+  w.eng:order(rec.id, 1)
+  fticks(w, 320, machine, 0)
+  check(summary(w, rec.id).text:find("nothing came out", 1, true), "stalled machines are reported", summary(w, rec.id).text)
+  eq(summary(w, rec.id).errors, 0, "not failed")
+  check(untilF(w, machine, 1, function() return summary(w, rec.id).runs == 2 end, 40), "finishes when the machines work again")
+end)
+
+test("factory steps chain with other steps, and two recipes take turns on the same machines", function()
+  local w = world({ stock = { ["minecraft:oak_log"] = 20, ["minecraft:oak_planks"] = 100 } })
+  w.vault.sim.invs["fin"], w.vault.sim.invs["fout"] = newInv(27), newInv(27)
+  local function mach()
+    return {
+      kind = "factory",
+      inputs = { { key = "minecraft:oak_planks", name = "minecraft:oak_planks", displayName = "Oak Planks", count = 2, inventory = "fin" } },
+      outputs = { "fout" },
+      result = { key = "minecraft:stick", name = "minecraft:stick", displayName = "Stick", count = 1, maxCount = 64 },
+    }
+  end
+  local machine = { inputs = { { inv = "fin", item = "minecraft:oak_planks", count = 2 } }, outputs = { { inv = "fout", item = "minecraft:stick", count = 1 } } }
+  local a = w.eng:add({ name = "Sticks", steps = { PLANKS(), mach() } })
+  local b = w.eng:add({ name = "More sticks", steps = { mach() } })
+  w.eng:order(a.id, 4)
+  w.eng:order(b.id, 2)
+  fticks(w, 3, machine, 1)
+  local sa, sb = summary(w, a.id), summary(w, b.id)
+  check((sa.text .. " " .. sb.text):find("waiting for the machines", 1, true), "one waits for the other", sa.text, sb.text)
+  check(untilF(w, machine, 1, function() return summary(w, a.id).runs == 1 and summary(w, b.id).runs == 1 end, 80), "both finish", summary(w, a.id).text, summary(w, b.id).text)
+  eq(w.vault.sim.stock["minecraft:stick"], 6, "6 sticks in all")
+  eq(w.vault.sim.stock["minecraft:oak_planks"], 88, "12 planks used, none crafted (the vault had plenty)")
+end)
+
+test("a reboot in the middle of a factory batch carries on with what was already sent", function()
+  local w, step, machine = factoryWorld()
+  local rec = w.eng:add({ name = "Blocks", steps = { step } })
+  w.eng:order(rec.id, 3)
+  fticks(w, 1, machine, 0)
+  eq(countOf(w.vault.sim.invs["fin1"], "minecraft:raw_iron"), 6, "fed")
+  w.eng:saveState(true)
+  local eng = reboot(w)
+  check(untilF(w, machine, 1, function() return eng:summary(eng:get(rec.id)).runs == 1 end, 40), "finished after the reboot")
+  eq(w.vault.sim.stock["minecraft:raw_iron"], 24, "nothing was sent twice")
+  eq(w.vault.sim.stock["minecraft:iron_block"], 3, "3 blocks")
+end)
+
+test("scanning a factory step reads the inputs and the result; it runs once its inventories are set", function()
+  local details = function(key) return { displayName = nameOf(key), maxCount = maxOf(key) } end
+  local inv = { size = 27, items = {
+    { slot = 1, key = "minecraft:raw_iron", name = "minecraft:raw_iron", count = 2 },
+    { slot = 2, key = "minecraft:oak_log", name = "minecraft:oak_log", count = 1 },
+    { slot = 10, key = "minecraft:raw_iron", name = "minecraft:raw_iron", count = 1 },
+    { slot = 9, key = "minecraft:iron_block", name = "minecraft:iron_block", count = 1 },
+  } }
+  local step = Recipes.scan(inv, details, "factory")
+  eq(#step.inputs, 2, "two kinds of input")
+  eq(step.inputs[1].count, 3, "raw iron adds up over the cells")
+  eq(step.result.key, "minecraft:iron_block", "the result from slot 9")
+  eq(Recipes.describe(step), "Factory 3 Raw Iron + 1 Oak Log -> 1 Iron Block", "described")
+  check(Recipes.factoryProblem(step):find("entry inventory", 1, true), "needs its inventories", Recipes.factoryProblem(step))
+  local none, why = Recipes.scan({ size = 27, items = { { slot = 1, key = "minecraft:raw_iron", name = "minecraft:raw_iron", count = 2 } } }, details, "factory")
+  check(none == nil and why:find("slot 9", 1, true), "no result: refused", tostring(why))
+  eq(Recipes.maxBatch(step, details), 21, "21 units fit a stack of three raw iron each")
+  step.batch = 5
+  eq(Recipes.maxBatch(step, details), 5, "or the step's own cap")
+  local w = world({ stock = { ["minecraft:raw_iron"] = 30, ["minecraft:oak_log"] = 10 } })
+  local rec = w.eng:add({ name = "Blocks", steps = { step } })
+  w.eng:order(rec.id, 1)
+  ticks(w, 2)
+  check(summary(w, rec.id).text:find("entry inventory", 1, true), "waits for the setup", summary(w, rec.id).text)
+  eq(summary(w, rec.id).state, "waiting", "waiting")
 end)
 
 print(string.format("%d passed, %d failed", passed, failures))
