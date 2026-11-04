@@ -102,6 +102,16 @@ function U.readBuild(root)
   return b ~= "" and b or nil
 end
 
+-- Where the folder at root was fetched from (data/source, written by the
+-- one-file installer when it knows), or nil.
+function U.readSource(root)
+  local h = fs.open(fs.combine(root or "/warehouse", "data/source"), "r")
+  if not h then return nil end
+  local s = (h.readAll() or ""):gsub("%s+$", "")
+  h.close()
+  return s ~= "" and s or nil
+end
+
 function U.readTable(path)
   if not fs.exists(path) then return nil end
   local h = fs.open(path, "r")

@@ -249,8 +249,53 @@ local function craft(cfg, req)
   return reply
 end
 
+-- Whether the worker starts on boot here (a startup file names the
+-- crafter), so a reboot after an update brings it back.
+local function onBoot()
+  if settings and settings.get("shell.allow_startup") == false then return false end
+  local files = {}
+  if fs.exists("startup") and not fs.isDir("startup") then files[#files + 1] = "startup" end
+  if fs.exists("startup.lua") then files[#files + 1] = "startup.lua" end
+  if fs.isDir("startup") then
+    for _, f in ipairs(fs.list("startup")) do files[#files + 1] = fs.combine("startup", f) end
+  end
+  for _, p in ipairs(files) do
+    local h = fs.open(p, "r")
+    if h then
+      local text = h.readAll() or ""
+      h.close()
+      if text:find("crafter", 1, true) then return true end
+    end
+  end
+  return false
+end
+
+-- Fetches warehouse.lua from url, checks it is the build asked for, runs it
+-- from memory (it writes the folder) and says so; W.run reboots after the
+-- reply has gone out.
+local function update(cfg, req)
+  if type(req.url) ~= "string" or type(req.build) ~= "string" then return { ok = false, error = "bad update request" } end
+  if not http then return { ok = false, error = "HTTP is turned off on this turtle" } end
+  if not onBoot() then return { ok = false, error = "the worker does not start on boot here: run 'crafter startup' on the turtle first" } end
+  local sep = req.url:find("?", 1, true) and "&" or "?"
+  local res, err = http.get(req.url .. sep .. "t=" .. tostring(os.epoch("utc")), nil, true)
+  if not res then return { ok = false, error = "download failed: " .. tostring(err) } end
+  local text = res.readAll() or ""
+  res.close()
+  if text:sub(1, 16) ~= "-- warehouse.lua" then return { ok = false, error = "the download is not warehouse.lua" } end
+  local got = text:match('\nlocal BUILD = "([^"]+)"')
+  if got ~= req.build then return { ok = false, error = ("the download is build %s, not %s"):format(tostring(got), req.build) } end
+  local fn, lerr = load(text, "=warehouse.lua", "t", setmetatable({}, { __index = _ENV }))
+  if not fn then return { ok = false, error = "warehouse.lua does not compile: " .. tostring(lerr) } end
+  local ok, perr = pcall(fn, "crafter")
+  if not ok then return { ok = false, error = "warehouse.lua failed: " .. tostring(perr) } end
+  return { ok = true, build = got, rebooting = true }
+end
+
 local function handle(cfg, req)
-  if req.op == "ping" then
+  if req.op == "update" then
+    return update(cfg, req)
+  elseif req.op == "ping" then
     local free = 0
     for slot = 1, 16 do
       if turtle.getItemCount(slot) == 0 then free = free + 1 end
@@ -302,7 +347,13 @@ function W.run(opts)
       if not ok then reply = { ok = false, error = tostring(reply) } end
       reply.id = body.id
       rednet.send(sender, secure.seal(opts.key, "crafter_reply", reply), W.REPLY)
-      if body.op == "craft" then
+      if body.op == "update" then
+        say(reply.ok and ("Updated to build " .. tostring(reply.build) .. "; rebooting") or ("Update failed: " .. tostring(reply.error)))
+        if reply.ok then
+          sleep(1.5)
+          os.reboot()
+        end
+      elseif body.op == "craft" then
         n = n + 1
         if reply.ok then
           say(string.format("#%d: %d x %s", n, reply.made, reply.result and util.shortName(reply.result.name) or "?"))

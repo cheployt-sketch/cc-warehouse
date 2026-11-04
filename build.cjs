@@ -7,6 +7,10 @@ const fs = require("fs");
 const path = require("path");
 
 const SRC = path.join(__dirname, "src");
+// Where the packed file will be fetched from (publish.cjs sets it): the
+// installer records it in data/source, so the crafter can send its turtle
+// there for the same build.
+const SOURCE = process.env.WAREHOUSE_SOURCE || "";
 const OUT = path.join(__dirname, "dist", "warehouse.lua");
 
 const list = fs.readFileSync(path.join(SRC, "files.txt"), "utf8")
@@ -60,6 +64,7 @@ for (const rel of list) {
 // The build: a fingerprint of every file, written to data/build on install.
 const BUILD = appver(sources.join("\0"));
 out += `local BUILD = ${JSON.stringify(BUILD)}\n`;
+out += `local SOURCE = ${JSON.stringify(SOURCE)}\n`;
 out += `
 local what = ({ ... })[1]
 if what ~= "crafter" and what ~= "client" and what ~= "warehouse" then
@@ -83,6 +88,11 @@ do
   local h = fs.open(fs.combine(dir, "build"), "w")
   h.write(BUILD)
   h.close()
+  if SOURCE ~= "" then
+    h = fs.open(fs.combine(dir, "source"), "w")
+    h.write(SOURCE)
+    h.close()
+  end
 end
 print(#names .. " files installed in " .. ROOT .. " (build " .. BUILD .. ")")
 shell.setPath(shell.path() .. ":" .. ROOT)

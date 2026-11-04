@@ -359,11 +359,29 @@ function E:turtleReady()
   -- A turtle running other crafter code than this computer is the usual
   -- reason for odd failures: say so where the state is shown.
   local own = util.readBuild(self.root)
-  if own and r.build and r.build ~= own then
-    self.turtle.msg = "runs another crafter build (" .. r.build:sub(1, 6) .. " here " .. own:sub(1, 6) .. "): update the turtle"
+  if own and r.build ~= own then
+    if r.build then
+      self.turtle.msg = "runs another crafter build (" .. r.build:sub(1, 6) .. " here " .. own:sub(1, 6) .. "): update the turtle"
+    else
+      self.turtle.msg = "its crafter build is unknown: update the turtle"
+    end
     self.log("turtle #" .. tostring(self.link.id) .. " " .. self.turtle.msg)
-  elseif own and not r.build then
-    self.turtle.msg = "its crafter build is unknown: update the turtle"
+    -- When this folder knows where it came from, send the turtle there for
+    -- the same build: once per build, so a turtle that cannot (no HTTP, not
+    -- on boot) is not asked again and again.
+    local source = util.readSource(self.root)
+    if source and self.turtleUpdateTried ~= own then
+      self.turtleUpdateTried = own
+      self.log("turtle #" .. tostring(self.link.id) .. ": sending it our build from " .. source)
+      local ok, err = self.link:update(source, own)
+      if ok and ok.ok ~= false then
+        self:turtleLost("updating to our build; it reboots")
+        return false
+      end
+      local why = (type(ok) == "table" and ok.error) or err
+      self.turtle.msg = "could not update it: " .. tostring(why)
+      self.log("turtle #" .. tostring(self.link.id) .. " " .. self.turtle.msg)
+    end
   end
   if (r.free or 16) < 16 then
     self.link:clear(self.cfg.input, self.cfg.output or self.cfg.input)

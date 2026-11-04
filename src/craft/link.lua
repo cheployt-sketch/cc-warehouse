@@ -146,6 +146,12 @@ function L:craft(grid, limit, timeout, input, output)
   return self:request({ op = "craft", grid = grid, limit = limit, input = input, output = output }, timeout or L.TIMEOUT)
 end
 
+-- Tells the turtle to fetch warehouse.lua from url, check that it is
+-- `build`, install it and reboot. Returns its answer, or nil and why.
+function L:update(url, build)
+  return self:request({ op = "update", url = url, build = build }, 90)
+end
+
 -- Makes the turtle drop everything it holds into its output chest.
 function L:clear(input, output)
   return self:request({ op = "clear", input = input, output = output }, 10)

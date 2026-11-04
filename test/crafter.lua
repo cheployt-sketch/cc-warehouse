@@ -219,9 +219,16 @@ local function newLink(vault, input, output)
   function link:setTurtle() end
   function link:ping()
     if self.away then return nil, "turtle #15 did not answer" end
-    return { crafty = true, fuel = 100, free = 16, label = "Crafty" }
+    return { crafty = true, fuel = 100, free = 16, label = "Crafty", build = self.build }
   end
   function link:clear() return { ok = true, dropped = {} } end
+  function link:update(url, build)
+    self.updates = (self.updates or 0) + 1
+    self.updatedTo = { url = url, build = build }
+    if self.updateFails then return { ok = false, error = self.updateFails } end
+    self.build = build -- it fetches that build and comes back with it
+    return { ok = true, build = build, rebooting = true }
+  end
   function link:craft(grid, limit)
     if self.away then return nil, "turtle #15 did not answer" end
     self.calls = self.calls + 1
@@ -651,6 +658,42 @@ test("learning finds the ingredient wherever it lies in the recipe chest", funct
   ticks(w, 2)
   eq(rec.steps[1].result and rec.steps[1].result.key, "minecraft:oak_planks", "learned from the moved log")
   eq(w.vault.sim.invs["recipe"].slots[21].count, 2, "one log taken from slot 21")
+end)
+
+test("a turtle on another build is sent to the folder's source for ours, once", function()
+  local w = world()
+  files[fs.combine("/warehouse", "data/build")] = "ours-1"
+  files[fs.combine("/warehouse", "data/source")] = "https://gist/raw/warehouse.lua"
+  w.link.build = "theirs-1"
+  ticks(w, 2)
+  eq(w.link.updates, 1, "told to update")
+  eq(w.link.updatedTo.url, "https://gist/raw/warehouse.lua", "from our source")
+  eq(w.link.updatedTo.build, "ours-1", "to our build")
+  eq(w.eng.turtle.state, "away", "away while it reboots")
+  ticks(w, 15)
+  eq(w.eng.turtle.state, "ready", "back")
+  eq(w.eng.turtle.msg, nil, "same build now, nothing to say")
+  eq(w.link.updates, 1, "not asked again")
+  -- A turtle that cannot update (no HTTP, say) is told once, then left alone.
+  local w2 = world()
+  files[fs.combine("/warehouse", "data/build")] = "ours-2"
+  files[fs.combine("/warehouse", "data/source")] = "https://gist/raw/warehouse.lua"
+  w2.link.build = nil
+  w2.link.updateFails = "HTTP is turned off on this turtle"
+  ticks(w2, 2)
+  eq(w2.link.updates, 1, "tried once")
+  eq(w2.eng.turtle.state, "ready", "still usable")
+  assert(w2.eng.turtle.msg:find("could not update it"), w2.eng.turtle.msg)
+  ticks(w2, 70)
+  eq(w2.link.updates, 1, "not tried again")
+  -- Without a source, only the message.
+  local w3 = world()
+  files[fs.combine("/warehouse", "data/build")] = "ours-3"
+  files[fs.combine("/warehouse", "data/source")] = nil
+  w3.link.build = "theirs-3"
+  ticks(w3, 2)
+  eq(w3.link.updates, nil, "nowhere to send it")
+  assert(w3.eng.turtle.msg:find("another crafter build"), w3.eng.turtle.msg)
 end)
 
 test("the turtle going away: items go back to the vault, the run waits and resumes", function()
