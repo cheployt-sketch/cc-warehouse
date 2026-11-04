@@ -384,6 +384,10 @@ test("recent lists the items moved last, newest first", function()
   eq(index:list({ category = "recent" })[1].key, "minecraft:cobblestone", "a deposit with recent = false does not count")
   index:withdraw("minecraft:iron_ingot", 1, "out", nil, { recent = false })
   eq(index:list({ category = "recent" })[1].key, "minecraft:cobblestone", "nor a withdraw")
+  -- The changed list (Lst on the screens) has every move, newest first.
+  local changed = index:list({ category = "recent", sort = "changed" })
+  eq(changed[1].key, "minecraft:iron_ingot", "but the changed list has it first")
+  eq(changed[1].changed ~= nil and changed[1].changed >= changed[2].changed, true, "with its time")
 end)
 
 test("folders: declared and used names, views, adding and removing", function()

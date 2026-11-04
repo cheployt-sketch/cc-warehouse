@@ -7,9 +7,10 @@
 -- ingredients out of storage and its results go back in, so the next step
 -- finds them there. A recipe looks like this:
 --
---   { id = "r1", name = "Pickaxe", mode = "off",       -- off, always, rate
+--   { id = "r1", name = "Pickaxe", mode = "off",       -- off, always, rate, keep
 --     count = 1,                                       -- "Run" = this many runs
 --     rateCount = 64, rateSeconds = 600,               -- for mode "rate"
+--     keepCount = 64,                                  -- for mode "keep": craft until the vault holds this many
 --     steps = {
 --       { kind = "craft", grid = { [1] = { key, name, displayName, slot } ... [9] },
 --         result = { key, name, displayName, count, maxCount } },  -- nil until learned
@@ -36,7 +37,7 @@ R.RESULT_SLOT = 9
 R.TURTLE_SLOTS = { 1, 2, 3, 5, 6, 7, 9, 10, 11 }
 R.OUTPUT_SLOT = 16 -- where the turtle puts what it crafted
 R.FREE_SLOTS = 7 -- turtle slots outside the grid, for results
-R.MODES = { "off", "always", "rate" }
+R.MODES = { "off", "always", "rate", "keep" }
 
 function R.turtleSlot(cell) return R.TURTLE_SLOTS[cell] end
 

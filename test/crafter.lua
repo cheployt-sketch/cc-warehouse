@@ -851,5 +851,26 @@ test("folders: recipes are filed from their settings, empty folders survive a re
   eq(#w.eng.recipes, 2, "and keeps them")
 end)
 
+test("keep: makes planks until the vault holds the count, rests, and goes again when some are taken", function()
+  local w = world({ stock = { ["minecraft:oak_log"] = 100 } })
+  local rec = w.eng:add({ name = "Planks", steps = { PLANKS() }, mode = "keep", keepCount = 16 })
+  check(until_(w, function() return w.vault.count("minecraft:oak_planks") >= 16 end, 40), "topped up")
+  eq(w.vault.count("minecraft:oak_planks"), 16, "exactly 16 planks (4 crafts)")
+  ticks(w, 3)
+  check(summary(w, rec.id).text:find("keeping 16: 16 stored", 1, true), "says what it keeps", summary(w, rec.id).text)
+  eq(summary(w, rec.id).state, "idle", "and rests")
+  ticks(w, 5)
+  eq(w.vault.count("minecraft:oak_planks"), 16, "makes nothing while there are enough")
+  w.vault.sim.stock["minecraft:oak_planks"] = 6
+  check(until_(w, function() return w.vault.count("minecraft:oak_planks") >= 16 end, 40), "goes again once some are taken")
+  eq(w.vault.count("minecraft:oak_planks"), 18, "10 lacking means 3 crafts of 4")
+  w.eng:set(rec.id, { keepCount = 30 })
+  check(until_(w, function() return w.vault.count("minecraft:oak_planks") >= 30 end, 40), "a higher count is topped up to")
+  w.eng:set(rec.id, { mode = "off" })
+  w.vault.sim.stock["minecraft:oak_planks"] = 0
+  ticks(w, 5)
+  eq(w.vault.count("minecraft:oak_planks"), 0, "off means off")
+end)
+
 print(string.format("%d passed, %d failed", passed, failures))
 if failures > 0 then error("tests failed", 0) end

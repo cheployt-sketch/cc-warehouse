@@ -17,7 +17,7 @@ local CRAFTER = {
   { "smeltIn", "crafter smelter in" }, { "smeltOut", "crafter smelter out" }, { "monitor", "crafter monitor" },
 }
 
--- name -> list of { kind = "screen" | "parcel" | "crafter", what, text }.
+-- name -> list of { kind = "screen" | "stats" | "parcel" | "crafter", what, text }.
 -- cfg is the warehouse config (loaded from root when nil).
 function U.gather(root, cfg)
   cfg = cfg or config.load(root) or config.defaultsFor(root)
@@ -32,6 +32,7 @@ function U.gather(root, cfg)
     add(ap.chest, "screen", tostring(ap.name or ap.monitor))
     add(ap.monitor, "screen", tostring(ap.name or ap.monitor))
   end
+  for _, sc in ipairs(cfg.stats or {}) do add(sc.monitor, "stats", tostring(sc.name or sc.monitor)) end
   local parcels = util.readTable(fs.combine(root, "parcels")) or {}
   for _, t in ipairs(parcels.tasks or {}) do add(t.inventory, "parcel", tostring(t.name or t.id)) end
   local crafter = util.readTable(fs.combine(root, "data/crafter/config")) or {}

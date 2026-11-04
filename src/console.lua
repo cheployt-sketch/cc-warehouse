@@ -19,6 +19,7 @@ local category = require("lib.category")
 local UI = require("lib.ui")
 local Uses = require("lib.uses")
 local Folders = require("lib.folders")
+local Stats = require("lib.stats")
 local Parcel = require("parcel")
 
 local Console = {}
@@ -125,6 +126,7 @@ function Console:refresh()
   if ping then
     self.data.stats = self:ask("stats") or self.data.stats
     self.data.access = self:ask("access") or self.data.access
+    self.data.statscreens = self:ask("statscreens") or self.data.statscreens
   end
   local cfg = config.load(self.root)
   self.data.cfgBroken = cfg == nil
@@ -150,6 +152,10 @@ function Console:apply(cfg, what)
     for _, n in ipairs(res.screens.removed) do parts[#parts + 1] = "screen " .. tostring(n) .. " removed" end
     for _, n in ipairs(res.storage.added) do parts[#parts + 1] = "+" .. n end
     for _, n in ipairs(res.storage.removed) do parts[#parts + 1] = "-" .. n end
+    local st = res.stats or {}
+    for _, n in ipairs(st.added or {}) do parts[#parts + 1] = "stat screen " .. tostring(n) .. " added" end
+    for _, n in ipairs(st.updated or {}) do parts[#parts + 1] = "stat screen " .. tostring(n) .. " changed" end
+    for _, n in ipairs(st.removed or {}) do parts[#parts + 1] = "stat screen " .. tostring(n) .. " removed" end
     for _, n in ipairs(res.notes) do parts[#parts + 1] = n end
     self:say((what or "Saved") .. ": " .. (#parts > 0 and table.concat(parts, ", ") or "applied"))
   elseif self.data.down then
@@ -195,6 +201,8 @@ function Console:draw()
   local y1, y2 = 3, h - 1
   if self.picker then
     self:drawPicker(y1, y2)
+  elseif self.form and self.form.kind == "confirm" then
+    self:drawConfirm(y1, y2)
   elseif self.form then
     self:drawForm(y1, y2)
   elseif self.page == "screens" then
@@ -313,6 +321,11 @@ function Console:drawScreens(y1, y2)
   end
   for i, ap in ipairs(cfg.access or {}) do
     if y >= y2 - 1 then break end
+    if i > 6 then
+      ui:text(2, y, "+" .. (#cfg.access - 6) .. " more", ui:col("lightGray", colors.white))
+      y = y + 1
+      break
+    end
     local s = live[ap.name or ap.monitor]
     local state = s and (s.up and (s.locked and "up,locked" or "up") or "DOWN") or "-"
     local name = tostring(ap.name or "?") .. (ap.pin and "*" or "")
@@ -321,8 +334,90 @@ function Console:drawScreens(y1, y2)
     ui:region(1, y, w, y, function() self:openScreenForm(i) end)
     y = y + 1
   end
-  ui:button(2, y2, "Add screen", function() self:openScreenForm(nil) end, { bg = ui:col("green", colors.black) })
-  self.hint = "Click a screen to change or remove it. *: has a PIN"
+  -- Stat screens: monitors with charts (lib.stats).
+  y = y + 1
+  if y < y2 - 1 then
+    ui:text(1, y, util.fit(" Stat screen       Monitor    Shows", w), ui:col("yellow"))
+    y = y + 1
+    local sLive = {}
+    for _, s in ipairs(self.data.statscreens or {}) do sLive[s.name or s.monitor] = s end
+    if #(cfg.stats or {}) == 0 then
+      ui:text(2, y, "none: a monitor with charts of what the warehouse does.", ui:col("lightGray", colors.white))
+    end
+    for i, sc in ipairs(cfg.stats or {}) do
+      if y >= y2 - 1 then break end
+      local s = sLive[sc.name or sc.monitor]
+      local state = s and (s.up and "up" or "DOWN") or "-"
+      local shows = (type(sc.show) == "table" and #sc.show > 0) and table.concat(sc.show, ",") or "everything"
+      local line = " " .. util.fit(tostring(sc.name or sc.monitor), 17) .. " " .. util.fit(sc.monitor or "", 10) .. " " .. util.fit(shows, w - 36) .. " " .. state
+      ui:text(1, y, util.fit(line, w), (s and not s.up) and ui:col("red") or colors.white)
+      ui:region(1, y, w, y, function() self:openStatForm(i) end)
+      y = y + 1
+    end
+  end
+  local x = ui:button(2, y2, "Add screen", function() self:openScreenForm(nil) end, { bg = ui:col("green", colors.black) }) + 1
+  ui:button(x, y2, "Add stat screen", function() self:openStatForm(nil) end, { bg = ui:col("green", colors.black) })
+  self.hint = "Click a screen to change or remove it. *: has a PIN. Stat screens show charts."
+end
+
+-- A stat screen's form: name, monitor, text scale and which panels it
+-- shows (none ticked: everything).
+function Console:openStatForm(index)
+  local cfg = self.data.cfg
+  cfg.stats = cfg.stats or {}
+  local sc = index and cfg.stats[index] or {}
+  self.form = {
+    kind = "stats",
+    index = index,
+    title = index and ("Stat screen " .. tostring(sc.name or sc.monitor)) or "New stat screen",
+    fields = {
+      { label = "Name", key = "name", f = UI.newField(sc.name or ("Stats" .. (#cfg.stats + 1)), { max = 16 }), w = 18 },
+      { label = "Monitor", key = "monitor", f = UI.newField(sc.monitor, { max = 40 }), w = 26, pick = "monitor" },
+      { label = "Text scale", key = "scale", f = UI.newField(sc.scale, { max = 4, filter = "[%d%.]" }), w = 6, hint = "0.5 or 1, blank: auto" },
+      { label = "Show", key = "show", toggles = Stats.ORDER, labels = Stats.SHORT, value = setOf(sc.show), hint = "nothing ticked: everything, in this order" },
+    },
+    notes = { "Charts of the fill, the item total, items over time, in and out, the top items,", "the kinds, the Parcel Service, the crafter, the screens and the service." },
+  }
+  if index then
+    self.form.extra = {
+      { "Remove stat screen", function()
+        table.remove(cfg.stats, index)
+        self.form, self.ui.focus = nil, nil
+        self:apply(cfg, "Stat screen " .. tostring(sc.name or sc.monitor) .. " removed")
+      end, "red" },
+    }
+  end
+  self.ui.focus = self.form.fields[1].f
+end
+
+function Console:saveStatForm()
+  local form, cfg = self.form, self.data.cfg
+  local name, monitor, scale = self:formValue("name"), self:formValue("monitor"), self:formValue("scale")
+  if monitor == "" then
+    self:say("Pick the monitor the charts go on", true)
+    return
+  end
+  if name == "" then name = monitor end
+  for i, sc in ipairs(cfg.stats or {}) do
+    if i ~= form.index and (sc.name == name or sc.monitor == monitor) then
+      self:say("There is already a stat screen " .. tostring(sc.name) .. " on " .. tostring(sc.monitor), true)
+      return
+    end
+  end
+  for _, ap in ipairs(cfg.access or {}) do
+    if ap.monitor == monitor then
+      self:say("Monitor " .. monitor .. " belongs to the screen " .. tostring(ap.name), true)
+      return
+    end
+  end
+  local sc = { name = name, monitor = monitor }
+  if scale ~= "" then sc.scale = tonumber(scale) end
+  local show = self:formValue("show")
+  if #show > 0 then sc.show = show end
+  cfg.stats = cfg.stats or {}
+  if form.index then cfg.stats[form.index] = sc else cfg.stats[#cfg.stats + 1] = sc end
+  self.form, self.ui.focus = nil, nil
+  self:apply(cfg, "Stat screen " .. name)
 end
 
 function Console:openScreenForm(index)
@@ -351,7 +446,27 @@ function Console:drawForm(y1, y2)
   local y = y1 + 1
   for _, fd in ipairs(form.fields) do
     ui:text(2, y, util.fit(fd.label, 11))
-    if fd.cycle then
+    if fd.toggles then
+      -- a row (or rows) of on/off buttons
+      local labels = {}
+      for i, key in ipairs(fd.toggles) do labels[i] = fd.labels and fd.labels[key] or key end
+      local rows = UI.wrap(labels, w - 13)
+      for r, row in ipairs(rows) do
+        local bx = 13
+        for _, b in ipairs(row) do
+          local key = fd.toggles[b.index]
+          local on = fd.value[key] == true
+          bx = ui:button(bx, y, b.label, function()
+            if fd.value[key] then fd.value[key] = nil else fd.value[key] = true end
+          end, { bg = on and ui:col("blue", colors.black) or nil, fg = on and colors.white or ui:col("lightGray", colors.white) }) + 1
+        end
+        if r < #rows then y = y + 1 end
+      end
+      if fd.hint then
+        y = y + 1
+        ui:text(13, y, util.fit(fd.hint, w - 13), ui:col("lightGray", colors.white))
+      end
+    elseif fd.cycle then
       ui:button(13, y, fd.value, function()
         local i = 1
         for k, v in ipairs(fd.cycle) do
@@ -362,10 +477,12 @@ function Console:drawForm(y1, y2)
     else
       ui:field(13, y, fd.w, fd.f)
     end
-    local x = 13 + fd.w + 1
-    if fd.pick then x = ui:button(x, y, "Pick", function() self:openPicker(fd) end) + 1 end
-    if fd.fill then x = ui:button(x, y, "Fill", function() self:fillItems(fd) end) + 1 end
-    if fd.hint then ui:text(x, y, util.fit(fd.hint, w - x + 1), ui:col("lightGray", colors.white)) end
+    if not fd.toggles then
+      local x = 13 + fd.w + 1
+      if fd.pick then x = ui:button(x, y, "Pick", function() self:openPicker(fd) end) + 1 end
+      if fd.fill then x = ui:button(x, y, "Fill", function() self:fillItems(fd) end) + 1 end
+      if fd.hint then ui:text(x, y, util.fit(fd.hint, w - x + 1), ui:col("lightGray", colors.white)) end
+    end
     y = y + 1
   end
   for _, note in ipairs(form.notes or {}) do
@@ -627,7 +744,16 @@ end
 
 function Console:formValue(key)
   for _, fd in ipairs(self.form.fields) do
-    if fd.key == key then return fd.cycle and fd.value or trim(fd.f.text) end
+    if fd.key == key then
+      if fd.toggles then
+        local out = {}
+        for _, k in ipairs(fd.toggles) do
+          if fd.value[k] then out[#out + 1] = k end
+        end
+        return out
+      end
+      return fd.cycle and fd.value or trim(fd.f.text)
+    end
   end
 end
 
@@ -638,6 +764,8 @@ function Console:saveForm()
     self:saveParcelForm()
   elseif form.kind == "folder" then
     self:saveFolderForm()
+  elseif form.kind == "stats" then
+    self:saveStatForm()
   elseif form.kind == "screen" then
     local name, chest, monitor = self:formValue("name"), self:formValue("chest"), self:formValue("monitor")
     if name == "" or chest == "" or monitor == "" then
@@ -759,15 +887,19 @@ function Console:storageRows()
       if names[p.name] then
         r.action = "Remove"
         r.fn = function()
-          cfg.storage.names = without(cfg.storage.names, p.name)
-          self:apply(cfg, p.name .. " no longer storage")
+          self:confirmExclude(p.name, "remove", function()
+            cfg.storage.names = without(cfg.storage.names, p.name)
+            self:apply(cfg, p.name .. " no longer storage")
+          end)
         end
       else
         r.action = "Exclude"
         r.fn = function()
-          cfg.storage.exclude = without(cfg.storage.exclude, p.name)
-          table.insert(cfg.storage.exclude, p.name)
-          self:apply(cfg, p.name .. " excluded")
+          self:confirmExclude(p.name, "exclude", function()
+            cfg.storage.exclude = without(cfg.storage.exclude, p.name)
+            table.insert(cfg.storage.exclude, p.name)
+            self:apply(cfg, p.name .. " excluded")
+          end)
         end
       end
     elseif p.role == "excluded" then
@@ -794,6 +926,57 @@ function Console:storageRows()
     rows[#rows + 1] = r
   end
   return rows
+end
+
+-- Taking a storage inventory out of the vault while it still holds items:
+-- asks whether to move them into the rest of the vault first. change()
+-- makes the config change; what is "exclude" or "remove".
+function Console:confirmExclude(name, what, change)
+  local inv = self:ask("inventory", { name = name })
+  if not inv or inv.total == 0 then return change() end
+  local Cap = what:sub(1, 1):upper() .. what:sub(2)
+  self.form = {
+    kind = "confirm",
+    title = name .. " holds " .. inv.total .. " items in " .. #inv.items .. " slots",
+    notes = {
+      "Move them into the rest of the vault first, or leave them where they are?",
+      "(Moving needs room in the other storage inventories.)",
+    },
+    buttons = {
+      { "Move, then " .. what, function()
+        change()
+        local res, err = self:ask("deposit", { from = name, recent = false })
+        if res then
+          self:say(string.format("Moved %d of %d items out of %s%s", res.moved, inv.total, name, res.message and ("; " .. res.message) or ""), res.message ~= nil)
+        else
+          self:say("Could not move the items: " .. tostring(err), true)
+        end
+        self:refresh()
+      end, "green" },
+      { Cap .. " as is", change, "orange" },
+      { "Cancel", function() end },
+    },
+  }
+end
+
+function Console:drawConfirm(y1, y2)
+  local ui, w = self.ui, self.ui.w
+  local form = self.form
+  ui:text(1, y1, util.fit(" " .. form.title, w), ui:col("yellow"))
+  local y = y1 + 1
+  for _, note in ipairs(form.notes or {}) do
+    ui:text(2, y, util.fit(note, w - 1), ui:col("lightGray", colors.white))
+    y = y + 1
+  end
+  y = y + 1
+  local x = 2
+  for _, b in ipairs(form.buttons) do
+    x = ui:button(x, y, b[1], function()
+      self.form, self.ui.focus = nil, nil
+      b[2]()
+    end, { bg = b[3] and ui:col(b[3], colors.black) or nil }) + 1
+  end
+  self.hint = "Click one. Esc: cancel."
 end
 
 function Console:drawStorage(y1, y2)
@@ -962,7 +1145,7 @@ function Console:onKey(code)
   elseif code == keys.tab then
     self.ui:focusNext()
   elseif code == keys.enter then
-    if self.form and not self.picker then
+    if self.form and self.form.fields and not self.picker then
       local last = self.form.fields[#self.form.fields]
       if f and last.f and f == last.f then self:saveForm() else self.ui:focusNext() end
     elseif f then

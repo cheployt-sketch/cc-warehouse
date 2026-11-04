@@ -34,6 +34,7 @@ lib/log.lua
 lib/runner.lua
 lib/secure.lua
 lib/service.lua
+lib/stats.lua
 lib/transport.lua
 lib/ui.lua
 lib/uses.lua

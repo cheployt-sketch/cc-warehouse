@@ -83,8 +83,8 @@ Other commands: `warehouse key` (the pairing key), `warehouse log`, `warehouse s
 The warehouse computer's own screen shows a control panel: the service draws it in its tab (`console = true` in the config, the default), and `warehouse ui` opens it in any other tab. Click the shell tab at the top to get back to the command line.
 
 - **Status**: items, kinds, fill per storage inventory, the screens and whether they are up, network and uptime; buttons to reload the config, compact, rescan, and stop the service (click twice).
-- **Screens**: every access point with its chest, monitor and state. Click one to change it (name, chest, monitor, PIN, lock time, text scale, with pickers for the chest and monitor) or remove it; `Add screen` makes a new one. The pickers say what every chest and monitor is already used for (a screen, a Parcel task, the crafter) and list the free ones first.
-- **Storage**: the storage types, and every inventory on the network with its role and fill: `Add`, `Exclude`, `Include` or `Remove` per row.
+- **Screens**: every access point with its chest, monitor and state. Click one to change it (name, chest, monitor, PIN, lock time, text scale, with pickers for the chest and monitor) or remove it; `Add screen` makes a new one. The pickers say what every chest and monitor is already used for (a screen, a stat screen, a Parcel task, the crafter) and list the free ones first. Below the access points come the **stat screens**, monitors that show charts of what the warehouse does (see "Stat screens" below): click one to change which panels it shows, `Add stat screen` makes one.
+- **Storage**: the storage types, and every inventory on the network with its role and fill: `Add`, `Exclude`, `Include` or `Remove` per row. Excluding or removing an inventory that still holds items asks whether to move them into the rest of the vault first.
 - **Settings**: presets, stack presets, lock time, rescan period, hostname, rednet on/off, log level, your own item categories, and the pairing key.
 - **Log**: the service log, scrollable.
 
@@ -137,7 +137,7 @@ Lay a step out in the recipe chest the way it goes in a crafting table: the ches
 ### Running
 
 - **Run** makes the recipe `count` times (the Run x field); **Order** makes that many of the final item. Orders queue up.
-- **Mode always** makes round after round for as long as there are ingredients; **rate** makes `rateCount` items every `rateSeconds` (a period it is still busy with counts as "behind", it is not piled up); **off** only does what you order.
+- **Mode always** makes round after round for as long as there are ingredients; **rate** makes `rateCount` items every `rateSeconds` (a period it is still busy with counts as "behind", it is not piled up); **keep** makes the result until the vault holds `keepCount` of it, rests, and goes again once the count drops below that (sticks until there are 64 in the vault, say); **off** only does what you order.
 - **Stop** drops the orders, the run and the mode.
 
 An order is planned backwards from the final item: each earlier step makes only what the later ones need and the vault does not already hold, so a recipe that starts from logs uses the planks and sticks you have before making more. The crafter takes turns between recipes, one turtle round (up to a stack of crafts) at a time, so an always-on recipe never blocks an order. A recipe's state says what it is doing (`step 2/3: crafting 12/64`, `smelting 20/64`, `waiting for Diamond`, `turtle #15 did not answer`, `turtle #15 has no chest on its front side`); an ingredient that runs out makes it wait, not fail. A craft the turtle cannot do (a layout that is no recipe) is a *problem*: the recipe stops with the message until you edit it or order again.
@@ -147,9 +147,9 @@ Smelting: the inputs go into the smelter's input chest, and whatever lands in th
 ### Where it shows
 
 - **The panel on the computer** (the crafter's tab): Recipes (every recipe, in folders: `New folder` makes one and the folder button on a recipe's form files it there; click a recipe to change, run, order or stop it), Setup, Log.
-- **The dashboard** on the monitor: every recipe and what it is doing; tap one for its stats and Run, Order (a number pad), Always and Stop.
+- **The dashboard** on the monitor: every recipe and what it is doing, in the same folders as the panel (tap a folder to open it; its top row leads back); tap a recipe for its stats and Run, Order (a number pad), Always and Stop. Tapped buttons light up for a moment.
 - **The Control Panel** (cc-control-panel's Crafter app): the same from the pocket computer.
-- **The shell**: `crafter status`, `crafter list`, `crafter scan`, `crafter add <name> [smelt]`, `crafter order <recipe> <n>`, `crafter run <recipe> [times]`, `crafter stop <recipe>`, `crafter set <recipe> mode=always|rate|off count= rateCount= rateSeconds= name= folder=`, `crafter quit`.
+- **The shell**: `crafter status`, `crafter list`, `crafter scan`, `crafter add <name> [smelt]`, `crafter order <recipe> <n>`, `crafter run <recipe> [times]`, `crafter stop <recipe>`, `crafter set <recipe> mode=always|rate|keep|off count= rateCount= rateSeconds= keepCount= name= folder=`, `crafter quit`.
 - **Apps on the same computer** can ask it the same things: a `crafter_request` event carrying `{ id, op, args }` (ops `status`, `list`, `recipe`, `add`, `scan`, `order`, `run`, `stop`, `set`, `shutdown`) is answered with a `crafter_reply` event `{ id, ok, result or error }`. That is how the Control Panel app reaches it.
 
 Its files are in `/warehouse/data/crafter/`: `config`, `recipes`, `state` (orders in progress and stats, so a reboot carries on where it was) and `log`.
@@ -180,12 +180,27 @@ Each command saves the config and tells the running service, which answers with 
 
 Everything you tap is at the bottom of the monitor, where it is easy to reach; the top row shows the warehouse name, item total and fill (or the last message), and the list fills the space between.
 
-- **The list** shows what is stored, coloured by category: blocks light blue, resources yellow, items white, unstackables magenta. The category row (`All`, `Recent`, `Blocks`, `Items`, `Resources`, `Unstack`) filters it; `Recent` lists what you put in or took out last, newest first (what the Parcel Service and the crafter move does not count), and is always in that order, so the sort button reads `New` there. The search box opens an on-screen keyboard above it, with keys as wide as the screen allows and two rows high on a 0.5 text scale; `Qty`/`A-Z` switches the order and `<` `>` turn pages. Items with NBT (enchanted tools, named items) show a `*`.
+- **The list** shows what is stored, coloured by category: blocks light blue, resources yellow, items white, unstackables magenta. The category row (`All`, `Recent`, `Blocks`, `Items`, `Resources`, `Unstack`) filters it; `Recent` lists what was put in or taken out last, newest first; its sort button switches between `New` (what people moved: the screens, the shell, apps) and `Lst` (the last changes by anyone, the Parcel Service and the crafter included). The search box opens an on-screen keyboard above it, with keys as wide as the screen allows and two rows high on a 0.5 text scale, and every key and button lights up for a moment when tapped; `Qty`/`A-Z` switches the order and `<` `>` turn pages. Items with NBT (enchanted tools, named items) show a `*`.
 - **Tap an item** and it stays highlighted while the amount panel slides in just above the controls, with the list still visible. Every preset amount and stack multiple moves that many into the chest the moment it is tapped; `Get stack` (twice as tall as the other buttons) moves a stack, or the number typed on the pad once there is one (it then reads `Get 37`); `All` moves everything; `Cancel` closes. If the chest fills up, the message says how many made it. A tap while the last one is still moving items is refused, so a double tap never moves twice, and taps are never lost while the chest is being read.
 - **The chest panel** appears by itself above the controls whenever the chest holds something (the chest is read a few times a second, so what you put in shows up at once): a row per stack with a `>` to store just that, and a `Store all` button. Anything you got out and changed your mind about goes back the same way. You never leave the list to use it.
 - **Stats** (`Stats` button on narrow monitors; always shown on the right on wide ones): fill bar, slots, items, kinds, fill per storage inventory, top items.
 - **Wide monitors** (57 columns or more, which a 0.5 text scale gives on most monitors) show the list and its controls on the left and the stats on the right, with the chest or amount panel at the bottom right.
 - **PIN**: without a `pin` a screen never locks (fine for single-player worlds; `warehouse setup` asks). With one, the number pad sits low on the screen; the screen locks again `lockAfter` seconds after the last tap, or only when `Lock` is tapped if `lockAfter` is 0.
+
+## Stat screens
+
+A stat screen is any monitor on the network that shows what the warehouse is doing as gauges, bars and charts: add one on the panel's Screens page (`Add stat screen`: a name, the monitor, the text scale and which panels to show), or in the config:
+
+```lua
+stats = {
+  { name = "Stats", monitor = "monitor_3", scale = 0.5,
+    show = { "fill", "items", "flow", "moves", "top", "kinds", "parcels", "crafter", "screens", "service" } },
+}
+```
+
+The panels, in the order `show` lists them (leave it out for all of them): `fill` (the storage fill as a gauge, with a bar per storage inventory), `items` (the item total in big digits, kinds and free slots), `flow` (items in storage over the last hours as a column chart), `moves` (what came in and went out, in green above and red below), `top` (the biggest stocks as bars), `kinds` (blocks, items, resources and unstackables as one stacked bar), `parcels` (the Parcel Service: tasks on, moved in the last hour, a row per task), `crafter` (the turtle, recipes running, waiting, queued or idle, made in the last hour, a row per recipe), `screens` (the access points, up or down) and `service` (uptime, rednet, hostname, version). Monitors of any size work: a panel that does not fit goes on the next page and a tap turns the page; wide monitors (57 columns and up, a 0.5 text scale on most) show two columns. As many stat screens as you like, each with its own choice of panels.
+
+The numbers behind the charts come from a point a minute (items, slots, what moved in and out, what the Parcel Service moved and the crafter made), kept for three hours in `/warehouse/data/history`; the crafter is asked for its state every few seconds over its local API, so the panel says "not running" when it is not.
 
 ## The command line
 
@@ -238,7 +253,7 @@ Every method raises an error with a readable message when the service refuses (`
 
 | op | arguments | result |
 | --- | --- | --- |
-| `items` | filter, category, sort, limit, offset | `{ items = {...}, total }`; category: `block`, `item`, `resource`, `unstackable` or `recent` (newest first); each item carries its `category` |
+| `items` | filter, category, sort, limit, offset | `{ items = {...}, total }`; category: `block`, `item`, `resource`, `unstackable` or `recent` (newest first; sort `recent` for what people moved, the default, or `changed` for the last changes by anyone); each item carries its `category` |
 | `item` | item | key, name, displayName, count, maxCount, stacks, locations |
 | `count` | item | number (a plain name counts every NBT variant) |
 | `withdraw` | item, count, to, toSlot, recent | `{ moved, key, message }` |
@@ -284,6 +299,7 @@ src/lib/access.lua    access point screens
 src/lib/ui.lua        monitor drawing and tap targets
 src/lib/uses.lua      what each inventory and monitor is used for (the pickers)
 src/lib/folders.lua   folders for the task and recipe lists
+src/lib/stats.lua     stat screens: the collector, the charts and the panels
 src/lib/config.lua    config file and inventory roles
 src/crafter.lua       the crafter: automated crafting from the vault
 src/craft/            its model (recipes), scheduler (engine), turtle line (link), the turtle's side (worker), dashboard (screen) and panel (console)
@@ -293,5 +309,5 @@ src/ccryptolib/       ChaCha20-Poly1305, BLAKE3, random (vendored)
 
 ## Testing
 
-- `node test/check.cjs` compiles every file with Fengari and flags Lua 5.3-only syntax (CC:Tweaked runs Lua 5.2). `node test/run.cjs` runs `test/sim.lua`, the index logic against simulated inventories that behave like CC's (slot-order inserts, stack sizes, drift), and `test/crafter.lua`, the crafter against a simulated vault, turtle and smelter (orders over several steps, always and rate modes, smelting, learning, a turtle that goes away, reboots), and `test/screen.lua`, an access point screen against a simulated monitor, chest and service (taps while the chest is being read, the amount panel, the keyboard, the Recent order, what the pickers know). `node test/run.cjs crafter` runs just the one. Fengari is taken from the sibling `cc-control-panel/node_modules`.
+- `node test/check.cjs` compiles every file with Fengari and flags Lua 5.3-only syntax (CC:Tweaked runs Lua 5.2). `node test/run.cjs` runs `test/sim.lua`, the index logic against simulated inventories that behave like CC's (slot-order inserts, stack sizes, drift), and `test/crafter.lua`, the crafter against a simulated vault, turtle and smelter (orders over several steps, always and rate modes, smelting, learning, a turtle that goes away, reboots), and `test/screen.lua`, an access point screen against a simulated monitor, chest and service (taps while the chest is being read, the amount panel, the keyboard and its flash, the Recent order, a stat screen, what the pickers know). `node test/run.cjs crafter` runs just the one. Fengari is taken from the sibling `cc-control-panel/node_modules`.
 - The crafter answers `debug.screen`, `debug.touch`, `debug.console` and `debug.click` the same way over its `crafter_request` events. In game, the service accepts two test hooks from programs on the warehouse computer only: `debug.screen` (`{ access = name_or_number }`) returns the text of an access point's monitor, and `debug.touch` (`{ access, x, y }`) taps it. With them a script can drive the screens without standing at the monitor; `vault.try("debug.touch", { x = 5, y = 3 })` from the client library does it.

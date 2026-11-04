@@ -104,8 +104,10 @@ end
 -- key -> table), onDetails(details) called when the cache grows,
 -- onChange(changes) called after every operation that changed something,
 -- with a list of { key, delta, count }, recent (key -> time of the last
--- move) with onRecent(recent) when it changes, categories (item name ->
--- category overrides) and log(msg).
+-- move a person made) with onRecent(recent) when it changes, changed (key
+-- -> time of the last move by anyone, automation included) with
+-- onChanged(changed), categories (item name -> category overrides) and
+-- log(msg).
 function Index.new(opts)
   local self = setmetatable({}, Index)
   self.invs = {}
@@ -116,6 +118,8 @@ function Index.new(opts)
   self.onChange = opts.onChange
   self.recent = opts.recent or {}
   self.onRecent = opts.onRecent
+  self.changed = opts.changed or {}
+  self.onChanged = opts.onChanged
   self.recentDirty = false
   self.categories = opts.categories or {}
   self.log = opts.log or function() end
@@ -137,9 +141,12 @@ function Index:reclassify(categories)
   self.version = self.version + 1
 end
 
--- Notes that an item kind was just moved in or out.
-function Index:touchRecent(key)
-  self.recent[key] = os.epoch("utc")
+-- Notes that an item kind was just moved in or out: by anyone (the
+-- changed list), and unless byAutomation, by a person (the recent list).
+function Index:touchRecent(key, byAutomation)
+  local now = os.epoch("utc")
+  if not byAutomation then self.recent[key] = now end
+  self.changed[key] = now
   self.recentDirty = true
 end
 
@@ -198,7 +205,9 @@ function Index:flush()
   if self.recentDirty then
     self.recentDirty = false
     pruneRecent(self.recent)
+    pruneRecent(self.changed)
     if self.onRecent then self.onRecent(self.recent) end
+    if self.onChanged then self.onChanged(self.changed) end
   end
   if #changes > 0 and self.onChange then self.onChange(changes) end
   return changes
@@ -299,8 +308,9 @@ end
 -- Everything in storage. opts: filter (text matched against the item name
 -- and display name), category ("block", "item", "resource", "unstackable",
 -- or "recent" for the items moved last, newest first), sort ("count", the
--- default, or "name"), limit, offset. Returns the list and the total
--- number of matches.
+-- default, or "name"; on the recent category "recent", the default, lists
+-- what people moved and "changed" what anyone moved), limit, offset.
+-- Returns the list and the total number of matches.
 function Index:list(opts)
   opts = opts or {}
   local cat = opts.category
@@ -311,19 +321,24 @@ function Index:list(opts)
       local d = self:detail(key)
       local wanted = true
       if cat == "recent" then
-        wanted = self.recent[key] ~= nil
+        if opts.sort == "changed" then wanted = self.changed[key] ~= nil else wanted = self.recent[key] ~= nil end
       elseif cat then
         wanted = d.category == cat
       end
       if wanted and (not opts.filter or opts.filter == "" or util.contains(d.displayName, opts.filter) or util.contains(it.name, opts.filter)) then
         out[#out + 1] = {
           key = key, name = it.name, nbt = it.nbt, displayName = d.displayName, count = it.count, maxCount = d.maxCount,
-          stacks = #it.locs, category = d.category, recent = self.recent[key],
+          stacks = #it.locs, category = d.category, recent = self.recent[key], changed = self.changed[key],
         }
       end
     end
   end
-  if cat == "recent" and (opts.sort == nil or opts.sort == "recent") then
+  if cat == "recent" and opts.sort == "changed" then
+    table.sort(out, function(a, b)
+      if a.changed ~= b.changed then return a.changed > b.changed end
+      return a.key < b.key
+    end)
+  elseif cat == "recent" and (opts.sort == nil or opts.sort == "recent") then
     table.sort(out, function(a, b)
       if a.recent ~= b.recent then return a.recent > b.recent end
       return a.key < b.key
@@ -463,7 +478,7 @@ function Index:withdraw(key, count, to, toSlot, opts)
     if short then self:scanDirty() end
     if not short or got == 0 then break end
   end
-  if moved > 0 and not (opts and opts.recent == false) then self:touchRecent(key) end
+  if moved > 0 then self:touchRecent(key, opts ~= nil and opts.recent == false) end
   self:flush()
   if moved < count then
     if err then return moved, err, (moved == 0) and "refused" or nil end
@@ -609,9 +624,7 @@ function Index:deposit(from, opts)
     if short then self:scanDirty() end
     if not short or got == 0 then break end
   end
-  if opts.recent ~= false then
-    for key in pairs(byKey) do self:touchRecent(key) end
-  end
+  for key in pairs(byKey) do self:touchRecent(key, opts.recent == false) end
   self:flush()
   local message
   if unplaced > 0 then message = "storage full: " .. unplaced .. " left behind" end

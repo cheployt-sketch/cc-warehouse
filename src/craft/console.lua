@@ -21,7 +21,7 @@ Console.__index = Console
 local PAGES = { { "recipes", "Recipes" }, { "setup", "Setup" }, { "log", "Log" } }
 local REFRESH = 2
 local MSG_TIME = 8
-local MAX_STEP_ROWS = 6
+local MAX_STEP_ROWS = 5
 
 local STATE_COLORS = { running = "lime", waiting = "orange", learning = "yellow", problem = "red", queued = "lightBlue", idle = "white" }
 
@@ -221,6 +221,7 @@ function Console:openRecipeForm(id)
     count = UI.newField(r.count or 1, { max = 5, filter = "%d" }),
     rateCount = UI.newField(r.rateCount or 64, { max = 6, filter = "%d" }),
     rateSeconds = UI.newField(r.rateSeconds or 600, { max = 6, filter = "%d" }),
+    keep = UI.newField(r.keepCount or 64, { max = 6, filter = "%d" }),
     order = UI.newField("", { max = 6, filter = "%d" }),
     mode = r.mode or "off",
   }
@@ -235,6 +236,7 @@ function Console:formRecipe()
   r.count = tonumber(f.count.text) or 1
   r.rateCount = tonumber(f.rateCount.text) or 64
   r.rateSeconds = tonumber(f.rateSeconds.text) or 600
+  r.keepCount = tonumber(f.keep.text) or 64
   return r
 end
 
@@ -301,6 +303,10 @@ function Console:drawForm(y1, y2)
   ui:text(15, y, "items every")
   ui:field(27, y, 7, f.rateSeconds)
   ui:text(35, y, "s  (mode rate)", ui:col("lightGray", colors.white))
+  y = y + 1
+  ui:text(2, y, "Keep")
+  ui:field(7, y, 7, f.keep)
+  ui:text(15, y, "in the vault  (mode keep)", ui:col("lightGray", colors.white))
   y = y + 1
   ui:text(2, y, "Steps", ui:col("yellow"))
   local x = ui:button(9, y, "Scan craft", function() self:scanStep("craft") end) + 1

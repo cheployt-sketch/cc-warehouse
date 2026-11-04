@@ -1,6 +1,8 @@
 -- craft.screen: the crafter's dashboard on a monitor. The recipes and
--- what each is doing fill the screen; tap one and a panel at the bottom
--- shows its stats with Run, Order (a number pad), Always and Stop.
+-- what each is doing fill the screen, folders (lib.folders) first; tap a
+-- folder to open it, a recipe for a panel at the bottom with its stats
+-- and Run, Order (a number pad), Always and Stop. Tapped buttons light up
+-- for a moment.
 --
 -- It never takes a monitor that is one of the warehouse's access points:
 -- the one named in the crafter's setup is refused if it is, and when none
@@ -8,11 +10,13 @@
 
 local util = require("lib.util")
 local UI = require("lib.ui")
+local Folders = require("lib.folders")
 
 local Screen = {}
 Screen.__index = Screen
 
 local REFRESH = 2 -- seconds between redraws (times tick)
+local FLASH = 0.15 -- seconds a tapped button stays lit
 local MSG_TIME = 6
 local ACCESS_EVERY = 30 -- seconds between looks at which monitors the access points use
 
@@ -33,6 +37,7 @@ function Screen.new(opts)
   self.accessMonitors = {}
   self.accessAt = -1000
   self.scroll = 0
+  self.folder = nil -- the open folder
   return self
 end
 
@@ -86,6 +91,7 @@ function Screen:attach()
   self.monitor = name
   self.mon = mon
   self.ui = UI.new(mon)
+  self.ui.flashTime = FLASH
   self.ok = true
   return true
 end
@@ -174,7 +180,8 @@ function Screen:drawPanel(x, y, w, h, s)
   ui:text(x, y + 1, util.fit(" " .. s.text, w), col)
   ui:text(x, y + 2, util.fit(" makes " .. (s.result or "?"), w), ui:col("lightGray", colors.white))
   ui:text(x, y + 3, util.fit(string.format(" made %s  runs %d  err %d", util.fmtCount(s.made, 7), s.runs, s.errors), w), ui:col("lightGray", colors.white))
-  local mode = s.mode == "rate" and string.format("rate %d/%ds", s.rateCount or 1, s.rateSeconds or 600) or s.mode
+  local mode = s.mode
+  if s.mode == "rate" then mode = string.format("rate %d/%ds", s.rateCount or 1, s.rateSeconds or 600) elseif s.mode == "keep" then mode = "keep " .. tostring(s.keepCount or 64) end
   ui:text(x, y + 4, util.fit(" " .. mode .. "  last " .. ago(s.lastRun) .. (s.pending > 0 and ("  +" .. s.pending) or ""), w), ui:col("lightGray", colors.white))
   local labels = { "Run", "Order", s.mode == "always" and "Always:on" or "Always", "Stop" }
   local bw = math.floor((w - 3) / 4)
@@ -234,36 +241,57 @@ function Screen:drawAll()
     self.selected, self.dialog = nil, nil
   end
   local panelH = selected and self:panelHeight(h) or 0
-  local rows = h - 1 - panelH
+  local space = h - 1 - panelH
   if #list == 0 then
     ui:text(1, 2, util.fit(" No recipes yet. Lay one out", w), ui:col("lightGray", colors.white))
     ui:text(1, 3, util.fit(" in the recipe chest and", w), ui:col("lightGray", colors.white))
     ui:text(1, 4, util.fit(" scan it on the computer.", w), ui:col("lightGray", colors.white))
   end
-  local pages = math.max(1, math.ceil(#list / math.max(1, rows - (#list > rows and 1 or 0))))
-  local perPage = rows
-  if #list > rows then perPage = rows - 1 end
+  -- Folders first; inside one, the top row leads back.
+  local view = Folders.view(self.engine.folders, list, self.folder)
+  local rows = {}
+  if self.folder then rows[#rows + 1] = { back = true } end
+  for _, f in ipairs(view.folders) do rows[#rows + 1] = { folder = f } end
+  for _, it in ipairs(view.items) do rows[#rows + 1] = { recipe = it.entry } end
+  local perPage = space
+  if #rows > space then perPage = space - 1 end
   perPage = math.max(1, perPage)
+  local pages = math.max(1, math.ceil(#rows / perPage))
   self.scroll = util.clamp(self.scroll, 0, math.max(0, pages - 1))
   local first = self.scroll * perPage
+  local folderCol = ui:col("lightBlue", colors.white)
   for i = 1, perPage do
-    local s = list[first + i]
-    if not s then break end
+    local r = rows[first + i]
+    if not r then break end
     local y = 1 + i
-    local isSel = s.id == self.selected
-    local stateW = math.min(#s.text, math.floor(w / 2))
-    local name = util.fit(s.name, w - stateW - 2)
-    ui:text(1, y, " " .. name, isSel and colors.black or colors.white, isSel and ui:col("lightGray", colors.black) or colors.black)
-    ui:text(w - stateW + 1, y, s.text:sub(1, stateW), isSel and colors.black or self:stateColor(s), isSel and ui:col("lightGray", colors.black) or colors.black)
-    ui:region(1, y, w, y, function()
-      if self.selected == s.id then
-        self.selected, self.dialog = nil, nil
-      else
-        self.selected, self.dialog = s.id, nil
-      end
-    end)
+    if r.back then
+      ui:text(1, y, util.fit(" < " .. self.folder .. "/", w), folderCol)
+      ui:region(1, y, w, y, function()
+        self.folder, self.scroll = nil, 0
+      end)
+    elseif r.folder then
+      local f = r.folder
+      ui:text(1, y, util.fit(" + " .. f.name .. "  (" .. f.count .. ")", w), folderCol)
+      ui:region(1, y, w, y, function()
+        self.folder, self.scroll = f.name, 0
+      end)
+    else
+      local s = r.recipe
+      local isSel = s.id == self.selected
+      local stateW = math.min(#s.text, math.floor(w / 2))
+      local name = util.fit(s.name, w - stateW - 2)
+      ui:text(1, y, " " .. name, isSel and colors.black or colors.white, isSel and ui:col("lightGray", colors.black) or colors.black)
+      ui:text(w - stateW + 1, y, s.text:sub(1, stateW), isSel and colors.black or self:stateColor(s), isSel and ui:col("lightGray", colors.black) or colors.black)
+      ui:region(1, y, w, y, function()
+        if self.selected == s.id then
+          self.selected, self.dialog = nil, nil
+        else
+          self.selected, self.dialog = s.id, nil
+        end
+      end)
+    end
   end
-  if #list > rows then
+  if #rows > space then
     local y = 1 + perPage + 1
     local bx = ui:button(1, y, "<", function() self.scroll = self.scroll - 1 end, { w = 3 })
     ui:text(bx + 1, y, (self.scroll + 1) .. "/" .. pages)
@@ -317,6 +345,11 @@ function Screen:loop()
     local e = ev[1]
     if e == "monitor_touch" and ev[2] == self.monitor then
       self.ui:tap(ev[3], ev[4])
+      self:draw()
+      if self.ui.flash then self.flashTimer = os.startTimer(FLASH) end
+    elseif e == "timer" and ev[2] == self.flashTimer then
+      self.flashTimer = nil
+      self.ui.flash = nil
       self:draw()
     elseif e == "monitor_resize" and ev[2] == self.monitor then
       self.ui:resize()

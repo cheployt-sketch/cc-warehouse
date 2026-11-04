@@ -13,9 +13,10 @@
 --     for steps laid out without their result.
 --
 -- Each recipe runs on its own terms: mode "always" keeps making one round
--- after another, "rate" orders rateCount items every rateSeconds, and an
--- order or a "run N times" from the UI, the panel or the command line
--- queues work in any mode. Orders are planned backwards from the final
+-- after another, "rate" orders rateCount items every rateSeconds, "keep"
+-- tops the vault up to keepCount of the result and rests until it drops
+-- below that again, and an order or a "run N times" from the UI, the
+-- panel or the command line queues work in any mode. Orders are planned backwards from the final
 -- item (craft.recipes): intermediate steps make only what the vault lacks.
 --
 -- Files: /warehouse/data/crafter/config (the setup), recipes (the
@@ -272,8 +273,8 @@ function E:setMode(id, mode)
   return rec
 end
 
--- Changes settings: mode, count, rateCount, rateSeconds, name, folder
--- (blank: none).
+-- Changes settings: mode, count, rateCount, rateSeconds, keepCount, name,
+-- folder (blank: none).
 function E:set(id, fields)
   local rec = self:get(id)
   if fields.mode ~= nil then
@@ -285,7 +286,7 @@ function E:set(id, fields)
     if other and other ~= rec then error("there is already a recipe called " .. fields.name, 0) end
     rec.name = tostring(fields.name)
   end
-  for _, k in ipairs({ "count", "rateCount", "rateSeconds" }) do
+  for _, k in ipairs({ "count", "rateCount", "rateSeconds", "keepCount" }) do
     if fields[k] ~= nil then
       local n = math.floor(tonumber(fields[k]) or 0)
       if n < 1 then error(k .. " must be a positive number", 0) end
@@ -444,8 +445,19 @@ function E:wanted(rec, st)
     local step = rec.steps[#rec.steps]
     w = Recipes.maxBatch(step, function(k) return self:details(k) end) * last.count
     if w == math.huge then w = 64 end
+  elseif rec.mode == "keep" and w == 0 then
+    -- Mode "keep": make what the vault lacks of the result, then rest.
+    local keep = E.keepCount(rec)
+    local have = self:count(last.key)
+    st.keepHave = have
+    if have < keep then w = keep - have end
   end
   return w
+end
+
+-- How many of the result a recipe in mode "keep" keeps in the vault.
+function E.keepCount(rec)
+  return math.max(1, math.floor(tonumber(rec.keepCount) or 64))
 end
 
 function E:fail(rec, st, msg)
@@ -873,7 +885,7 @@ function E:summary(rec)
   local st = self:stateOf(rec.id)
   local s = {
     id = rec.id, name = rec.name, mode = rec.mode, count = rec.count, rateCount = rec.rateCount, rateSeconds = rec.rateSeconds,
-    folder = rec.folder, steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
+    keepCount = rec.keepCount, folder = rec.folder, steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
     runs = st.stats.runs, made = st.stats.made + (st.run and st.run.made or 0), crafts = st.stats.crafts, smelted = st.stats.smelted,
     errors = st.stats.errors, behind = st.stats.behind, lastRun = st.stats.lastRun, lastMessage = st.stats.lastMessage,
   }
@@ -915,6 +927,8 @@ function E:summary(rec)
   elseif rec.mode == "rate" then
     local due = st.rateDue and math.max(0, math.floor((st.rateDue - self.epoch()) / 1000)) or 0
     s.state, s.text = "idle", string.format("%d every %ds, next in %ds", rec.rateCount or 1, rec.rateSeconds or 600, due)
+  elseif rec.mode == "keep" then
+    s.state, s.text = "idle", string.format("keeping %d: %d stored", E.keepCount(rec), st.keepHave or 0)
   else
     s.state, s.text = "idle", "idle"
   end

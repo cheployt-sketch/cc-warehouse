@@ -489,13 +489,16 @@ test("the Recent tab lists the last moved item first, whatever the sort button s
   check(findRow(ap, "Iron Ingot") < findRow(ap, "Cobblestone"), "newest first")
   check(not findRow(ap, "Dirt"), "untouched items are not recent")
   check(findText(ap, "New"), "the sort button says New")
-  tapText(ap, "New")
-  check(findRow(ap, "Iron Ingot") < findRow(ap, "Cobblestone"), "still newest first")
   sim.clock = sim.clock + 1
   index:withdraw("minecraft:dirt", 1, "chest", nil, { recent = false })
   os.queueEvent("warehouse_event", { type = "change" })
   settle()
-  check(not findRow(ap, "Dirt"), "a move with recent = false does not show")
+  check(not findRow(ap, "Dirt"), "a move by automation does not show under New")
+  tapText(ap, "New")
+  check(findText(ap, "Lst"), "the button now says Lst")
+  check(findRow(ap, "Dirt") < findRow(ap, "Iron Ingot"), "Lst lists every change, newest first")
+  tapText(ap, "Lst")
+  check(findText(ap, "New") and not findRow(ap, "Dirt"), "and back to New")
   tapText(ap, "All")
   check(findText(ap, "Qty"), "the sort button is back on All")
   tapText(ap, "Qty")
@@ -523,6 +526,23 @@ test("the search keyboard has keys big enough to hit, two rows high on a tall sc
   eq(ap2.search, "z", "the row below the letter is still the key")
   tapText(ap2, "OK")
   check(not ap2.keyboard, "OK closes the keyboard")
+end)
+
+test("a tapped key lights up for a moment", function()
+  local ap = newScreen({ stock = { ["minecraft:cobblestone"] = 10 } })
+  tapText(ap, "Search...")
+  local x, y = findText(ap, "q")
+  eq(bgAt(ap, x, y), hex(colors.gray), "a key is gray")
+  tap(ap, x, y)
+  eq(bgAt(ap, x, y), hex(colors.white), "lit right after the tap")
+  eq(ap.search, "q", "and it typed")
+  run(0.3)
+  eq(bgAt(ap, x, y), hex(colors.gray), "back to normal once the flash is over")
+  local cx, cy = findText(ap, "clear")
+  tap(ap, cx, cy)
+  eq(bgAt(ap, cx, cy), hex(colors.white), "buttons light up too")
+  run(0.3)
+  eq(bgAt(ap, cx, cy), hex(colors.gray), "and go back")
 end)
 
 test("while a move is in flight the screen stays live but refuses a second move", function()
@@ -557,6 +577,59 @@ test("putting things in the chest shows the chest panel; its store button puts t
   eq(countIn("vault", "minecraft:iron_ingot"), 5, "in the vault")
   check(findRow(ap, "Stored 5 Iron Ingot"), "and reported")
   check(findRow(ap, "Iron Ingot"), "it is in the list now")
+end)
+
+test("a stat screen draws a fill gauge, big digits and charts, and a tap turns the page", function()
+  local ap, index = newScreen({ stock = { ["minecraft:cobblestone"] = 300, ["minecraft:iron_ingot"] = 20, ["minecraft:dirt"] = 100 } })
+  local Stats = require("lib.stats")
+  local service = ap.service
+  service.cfg = { access = { { name = "Main", chest = "chest", monitor = "monitor_0" } }, rednet = true, hostname = "wh" }
+  service.access, service.started, service.version = { ap }, 0, "0.1.0"
+  local col = Stats.Collector.new({ index = index, root = "/warehouse", parcel = function() return nil end })
+  for i = 1, 30 do col.points[i] = { t = i * 60000, items = 400 + i * 4, used = 7, slots = 54, inn = i % 3 == 0 and 12 or 0, out = i % 5 == 0 and 7 or 0 } end
+  monitors.monitor_1 = newBuffer(29, 19)
+  local sc = Stats.Screen.new(service, { name = "Stats", monitor = "monitor_1", show = { "fill", "items", "flow", "top" } }, col)
+  main = coroutine.create(function() sc:run() end)
+  filter = nil
+  deliver({ n = 0 })
+  settle()
+  check(sc.ok, "attached")
+  local st = index:stats()
+  local pct = math.floor(st.used / st.slots * 100 + 0.5)
+  local lines = sc.ui:lines()
+  check(lines[1]:find("Storage " .. pct .. "% full", 1, true), "the fill title", lines[1])
+  check(lines[3]:find(st.used .. "/" .. st.slots .. " slots", 1, true), "the slots line", lines[3])
+  check(lines[4]:find("vault", 1, true), "a row per storage inventory", lines[4])
+  local itemsRow
+  for i, l in ipairs(lines) do
+    if l:find("Items in storage", 1, true) then itemsRow = i end
+  end
+  check(itemsRow, "the items panel is on page 1")
+  local _, _, bg = sc.ui.win.getLine(itemsRow + 1)
+  check(bg:find(hex(colors.lightBlue), 1, true), "big digits are drawn as coloured cells")
+  check(lines[19]:find("tap for more", 1, true) and lines[19]:find("1/2", 1, true), "two pages", lines[19])
+  os.queueEvent("monitor_touch", "monitor_1", 5, 5)
+  settle()
+  lines = sc.ui:lines()
+  check(lines[19]:find("2/2", 1, true), "page 2 after a tap", lines[19])
+  check(lines[1]:find("Items over time", 1, true), "the chart is on page 2", lines[1])
+  _, _, bg = sc.ui.win.getLine(7)
+  check(bg:sub(29, 29) == hex(colors.lightBlue), "the newest column reaches the bottom row of the chart")
+  check(lines[8]:find("over 30 min", 1, true), "the axis says how long the chart covers", lines[8])
+  local topRow
+  for i, l in ipairs(lines) do
+    if l:find("Top items", 1, true) then topRow = i end
+  end
+  check(topRow and lines[topRow + 1]:find("Cobblestone", 1, true), "top items, biggest first")
+  os.queueEvent("monitor_touch", "monitor_1", 5, 5)
+  settle()
+  check(sc.ui:lines()[19]:find("1/2", 1, true), "and round to page 1")
+  local vals, per = Stats.series(col.points, "items", 10, "last")
+  eq(#vals, 10, "ten columns")
+  eq(per, 180, "three minutes each")
+  eq(vals[10], 520, "the newest value last")
+  eq(Stats.series(col.points, "inn", 10, "sum")[10], 12, "sums of what moved in")
+  eq(Stats.grew({ { cm = 10 }, { cm = 14 }, { cm = 20 } }, "cm", 120), 10, "growth over the last two points")
 end)
 
 test("the pickers know what each inventory and monitor is used for, free ones first", function()

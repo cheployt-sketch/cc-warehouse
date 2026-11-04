@@ -587,12 +587,15 @@ local function runService()
 
   local itemsPath = fs.combine(DATA, "items")
   local recentPath = fs.combine(DATA, "recent")
+  local changedPath = fs.combine(DATA, "changed")
   local index = Index.new({
     storage = config.storageNames(cfg),
     details = util.readTable(itemsPath) or {},
     onDetails = function(d) util.writeTable(itemsPath, d) end,
     recent = util.readTable(recentPath) or {},
     onRecent = function(r) util.writeTable(recentPath, r) end,
+    changed = util.readTable(changedPath) or {},
+    onChanged = function(c) util.writeTable(changedPath, c) end,
     categories = cfg.categories,
     log = log.warn,
   })
@@ -611,6 +614,7 @@ local function runService()
   runner:add("local", function() transport.runLocal(service) end)
   if cfg.rednet ~= false then service:startRednet() end
   service:applyScreens()
+  service:applyStats()
   runner:add("maintenance", function() maintenance(service) end)
   -- Apps hosted inside the service run in their own task; a failure in one
   -- is logged and retried, and never takes the service down.
@@ -633,7 +637,9 @@ local function runService()
       local wh = require("api")
       local Parcel = require("parcel")
       local vault = wh.connect({ mode = "local", probeTimeout = 3 })
-      Parcel.new({ vault = vault, root = ROOT, log = log.info }):run()
+      local p = Parcel.new({ vault = vault, root = ROOT, log = log.info })
+      service.parcel = p -- the stat screens read its tasks and stats
+      p:run()
     end)
   end
   -- The control panel, drawn in this tab (the log still goes to its file).

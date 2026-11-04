@@ -16,7 +16,7 @@
 --   crafter run <recipe> [times]     run the recipe that many times
 --   crafter stop <recipe>            stop it (orders, run and mode)
 --   crafter quit                     stop the service
---   crafter set <recipe> key=value   mode=off|always|rate, count, rateCount, rateSeconds, name, folder
+--   crafter set <recipe> key=value   mode=off|always|rate|keep, count, rateCount, rateSeconds, keepCount, name, folder
 --   crafter setup [key=value ..]     turtle, input, output, recipeChest, smeltIn, smeltOut, monitor, scale, smeltStall
 --   crafter worker [in side] [out side]   on the crafty turtle (front, top or bottom)
 --
@@ -51,7 +51,7 @@ local function usage()
   print("  " .. NAME .. " run <recipe> [times]")
   print("  " .. NAME .. " stop <recipe>")
   print("  " .. NAME .. " quit                stop the service")
-  print("  " .. NAME .. " set <recipe> mode=always|rate|off count= rateCount= rateSeconds= name= folder=")
+  print("  " .. NAME .. " set <recipe> mode=always|rate|keep|off count= rateCount= rateSeconds= keepCount= name= folder=")
   print("  " .. NAME .. " setup [turtle= input= output= recipeChest= smeltIn= smeltOut= monitor= scale= smeltStall=]")
   print("  " .. NAME .. " worker [in] [out]   on the crafty turtle")
 end
@@ -384,7 +384,7 @@ elseif cmd == "stop" then
 elseif cmd == "quit" then
   if must("shutdown") then print("Stopping the crafter.") end
 elseif cmd == "set" then
-  local vals, err = args[2] and assignments(args, 3, { mode = true, count = true, rateCount = true, rateSeconds = true, name = true, folder = true })
+  local vals, err = args[2] and assignments(args, 3, { mode = true, count = true, rateCount = true, rateSeconds = true, keepCount = true, name = true, folder = true })
   if not vals then
     printError(err or ("usage: " .. NAME .. " set <recipe> mode=always|rate|off count=N rateCount=N rateSeconds=N name=X"))
   else

@@ -29,6 +29,7 @@ Access.__index = Access
 
 local POLL = 0.3 -- seconds between reads of the chest
 local TICK = 1 -- seconds between looks at the clock (messages running out, the lock)
+local FLASH = 0.15 -- seconds a tapped key stays lit
 local MSG_TIME = 6 -- seconds a status message stays
 local WIDE = 57
 local CATEGORIES = { "all", "recent", "block", "item", "resource", "unstackable" }
@@ -47,6 +48,7 @@ function Access.new(service, cfg, global)
   self.search = ""
   self.page = 1
   self.sort = "count"
+  self.recentSort = "recent" -- on the Recent tab: "recent" (what people moved) or "changed" (anyone)
   self.keyboard = false
   self.dialog = nil
   self.chest = {}
@@ -108,6 +110,7 @@ function Access:attach()
   mon.setTextScale(scale)
   self.mon = mon
   self.ui = UI.new(mon)
+  self.ui.flashTime = FLASH
   self.ok = true
   return true
 end
@@ -218,13 +221,18 @@ function Access:drawControls(x, w, y2)
       self.dialog = nil
     end, { bg = self.tab == "stats" and ui:col("blue", colors.black) or nil })
   end
-  -- The Recent tab is always newest first; the sort button says so there.
+  -- The Recent tab is always newest first; its sort button switches between
+  -- New (what people moved) and Lst (the last changes by anyone).
   local recent = self.category == "recent"
-  local sortLabel = recent and "New" or (self.sort == "count" and "Qty" or "A-Z")
+  local sortLabel
+  if recent then sortLabel = self.recentSort == "changed" and "Lst" or "New" else sortLabel = self.sort == "count" and "Qty" or "A-Z" end
   right = right - (#sortLabel + 2) - 1
   ui:button(right, y, sortLabel, function()
-    if self.category == "recent" then return end
-    self.sort = self.sort == "count" and "name" or "count"
+    if self.category == "recent" then
+      self.recentSort = self.recentSort == "changed" and "recent" or "changed"
+    else
+      self.sort = self.sort == "count" and "name" or "count"
+    end
     self.page = 1
   end)
   local pageS = " " .. self.page .. "/" .. pages .. " "
@@ -278,10 +286,10 @@ function Access:drawControls(x, w, y2)
   return y
 end
 
--- The order the list is in: the Recent tab is newest first, the others
--- follow the sort button.
+-- The order the list is in: the Recent tab is newest first (by what
+-- people moved, or what anyone moved), the others follow the sort button.
 function Access:listSort()
-  return self.category == "recent" and "recent" or self.sort
+  return self.category == "recent" and self.recentSort or self.sort
 end
 
 -- The list for the current search, category and order; worked out once
@@ -761,6 +769,12 @@ function Access:uiLoop()
       -- the tap runs, so that the Lock button can still lock.
       if not self:isLocked() then self:touch() end
       self.ui:tap(ev[3], ev[4])
+      self:draw()
+      -- the tapped key lights up for a moment
+      if self.ui.flash then self.flashTimer = os.startTimer(FLASH) end
+    elseif e == "timer" and ev[2] == self.flashTimer then
+      self.flashTimer = nil
+      self.ui.flash = nil
       self:draw()
     elseif e == "monitor_resize" and ev[2] == self.cfg.monitor then
       self.ui:resize()

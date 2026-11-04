@@ -11,8 +11,16 @@ UI.__index = UI
 function UI.new(target)
   local self = setmetatable({ target = target }, UI)
   self.color = target.isColor and target.isColor() or false
+  self.flashTime = 0 -- seconds a tapped button or key is drawn lit (0: never)
   self:resize()
   return self
+end
+
+-- Whether the button or key at this rectangle was just tapped and should
+-- be drawn lit (the owner redraws once flashTime has passed).
+function UI:flashing(x1, y1, x2, y2)
+  local f = self.flash
+  return f ~= nil and f.x1 == x1 and f.y1 == y1 and f.x2 == x2 and f.y2 == y2 and os.clock() < f.till
 end
 
 function UI:resize()
@@ -154,6 +162,7 @@ function UI:button(x, y, label, fn, o)
   local h = o.h or 1
   local bg = o.bg or self:col("gray", colors.black)
   local fg = o.fg or colors.white
+  if self:flashing(x, y, x + w - 1, y + h - 1) then fg, bg = colors.black, colors.white end
   local s
   if not self.color then
     s = util.center("[" .. label .. "]", w)
@@ -170,11 +179,14 @@ function UI:button(x, y, label, fn, o)
   return x + w
 end
 
--- Runs the handler of the topmost target under (x, y). Returns whether one was hit.
+-- Runs the handler of the topmost target under (x, y). Returns whether one
+-- was hit. With flashTime set, the target is remembered so that the next
+-- draw shows it lit.
 function UI:tap(x, y)
   for i = #self.hits, 1, -1 do
     local h = self.hits[i]
     if x >= h.x1 and x <= h.x2 and y >= h.y1 and y <= h.y2 then
+      if self.flashTime > 0 then self.flash = { x1 = h.x1, y1 = h.y1, x2 = h.x2, y2 = h.y2, till = os.clock() + self.flashTime } end
       h.fn(x - h.x1 + 1, y - h.y1 + 1)
       return true
     end
@@ -239,8 +251,10 @@ function UI:keyboard(x, y, w, cb, o)
     for i = 1, #row do
       local ch = row:sub(i, i)
       local kx = x0 + (i - 1) * (keyW + 1)
+      local fg, bg = colors.white, keyBg
+      if self:flashing(kx, yy, kx + keyW, yy + keyH - 1) then fg, bg = colors.black, colors.white end
       for dy = 0, keyH - 1 do
-        self:text(kx, yy + dy, dy == labelRow and util.center(ch, keyW) or string.rep(" ", keyW), colors.white, keyBg)
+        self:text(kx, yy + dy, dy == labelRow and util.center(ch, keyW) or string.rep(" ", keyW), fg, bg)
       end
       self:region(kx, yy, kx + keyW, yy + keyH - 1, function() cb(ch) end)
     end

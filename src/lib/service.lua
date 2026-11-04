@@ -11,6 +11,7 @@ local util = require("lib.util")
 local config = require("lib.config")
 local VERSION = require("lib.version")
 local Access = require("lib.access")
+local Stats = require("lib.stats")
 local transport = require("lib.transport")
 local secure = require("lib.secure")
 
@@ -33,13 +34,82 @@ function Service.new(opts)
   self.screens = {} -- the running access points (lib.access objects)
   self.screenSeq = 0
   self.access = {} -- screens by position in the config and by name
+  self.statScreens = {} -- the running stat screens (lib.stats Screen objects)
+  self.statSeq = 0
+  self.collector = nil -- the lib.stats Collector, while a stat screen is configured
+  self.parcel = nil -- the hosted Parcel Service, set by warehouse.lua
+  self.version = VERSION
   self.sendEvent = nil -- set by the rednet transport: function(id, event)
   self.stopping = false
   self.configSeen = config.modified(self.root)
   self.index.onChange = function(changes)
+    if self.collector then self.collector:onChange(changes) end
     self:emit({ type = "change", items = changes, version = self.index.version })
   end
   return self
+end
+
+-- Stat screens (lib.stats) run as tasks too, and the collector they draw
+-- from runs while at least one is configured.
+function Service:addStatScreen(scCfg)
+  self.statSeq = self.statSeq + 1
+  local sc = Stats.Screen.new(self, scCfg, self.collector)
+  sc.id = self.statSeq
+  self.statScreens[#self.statScreens + 1] = sc
+  self.runner:add("stats:" .. sc.id, function() sc:run() end)
+  return sc
+end
+
+function Service:removeStatScreen(sc)
+  sc:stop()
+  self.runner:remove("stats:" .. sc.id)
+  for i, s in ipairs(self.statScreens) do
+    if s == sc then
+      table.remove(self.statScreens, i)
+      break
+    end
+  end
+end
+
+-- Makes the running stat screens match cfg.stats, as applyScreens does
+-- for the access points. Returns the names added, changed and removed.
+function Service:applyStats()
+  local wanted = self.cfg.stats or {}
+  if #wanted > 0 and not self.collector then
+    local service = self
+    self.collector = Stats.Collector.new({ index = self.index, root = self.root, parcel = function() return service.parcel end, log = self.log.warn })
+    self.runner:add("collector", function() service.collector:run() end)
+  end
+  local leftover = { table.unpack(self.statScreens) }
+  local function take(pred)
+    for i, sc in ipairs(leftover) do
+      if pred(sc) then
+        table.remove(leftover, i)
+        return sc
+      end
+    end
+  end
+  local added, updated, removed = {}, {}, {}
+  for _, scCfg in ipairs(wanted) do
+    local sc = take(function(s) return s.cfg.name ~= nil and s.cfg.name == scCfg.name end)
+      or take(function(s) return s.cfg.monitor == scCfg.monitor end)
+    if sc then
+      if sc:reconfigure(scCfg) then updated[#updated + 1] = sc.name end
+    else
+      sc = self:addStatScreen(scCfg)
+      added[#added + 1] = sc.name
+    end
+  end
+  for _, sc in ipairs(leftover) do
+    removed[#removed + 1] = sc.name
+    self:removeStatScreen(sc)
+  end
+  if #wanted == 0 and self.collector then
+    self.collector:save()
+    self.runner:remove("collector")
+    self.collector = nil
+  end
+  return added, updated, removed
 end
 
 -- Screens run as tasks of the runner, so they can start and stop while the
@@ -208,7 +278,7 @@ Service.ops = ops
 Service.help = {
   { "ping", "", "Who is serving: name, version, computer ID, hostname, uptime." },
   { "stats", "", "Slots used/free, item and kind totals, per-inventory fill." },
-  { "items", "filter?, category?, sort?, limit?, offset?", "Everything stored: key, name, displayName, count, maxCount, category. category: block, item, resource, unstackable or recent; sort: count (default) or name." },
+  { "items", "filter?, category?, sort?, limit?, offset?", "Everything stored: key, name, displayName, count, maxCount, category. category: block, item, resource, unstackable or recent; sort: count (default) or name, and on recent: recent (what people moved, default) or changed (what anyone moved)." },
   { "item", "item", "One item with its stack locations. item: key, name or display name." },
   { "count", "item", "How many of an item are stored (a plain name counts every NBT variant)." },
   { "withdraw", "item, count, to, toSlot?, recent?", "Move items out of storage into inventory `to`. Returns moved. recent = false keeps it off the Recent list (for automation)." },
@@ -225,6 +295,7 @@ Service.help = {
   { "unsubscribe", "", "Stop receiving events." },
   { "config", "", "Presets, hostname, storage rules and access points (no PINs)." },
   { "access", "", "The access points and whether their screens are up." },
+  { "statscreens", "", "The stat screens (monitors with charts, cfg.stats) and whether they are up." },
   { "help", "", "This list." },
   { "reload", "", "Read the config file again and apply it: screens, storage, categories, hostname, rednet." },
   { "shutdown", "", "Stop the service (local requests only)." },
@@ -394,6 +465,10 @@ function ops.reload(self)
   self.index:reclassify(cfg.categories or {})
   local storage = ops.rediscover(self)
   local added, updated, removed = self:applyScreens()
+  local sAdded, sUpdated, sRemoved = self:applyStats()
+  if #sAdded + #sUpdated + #sRemoved > 0 then
+    self.log.info(string.format("stat screens: %d added, %d changed, %d removed", #sAdded, #sUpdated, #sRemoved))
+  end
   local notes = {}
   local wasOn, isOn = old.rednet ~= false, cfg.rednet ~= false
   if wasOn ~= isOn then
@@ -405,7 +480,19 @@ function ops.reload(self)
   end
   self.log.info(string.format("config applied: %d screen(s) (%d added, %d changed, %d removed), storage %d added, %d removed%s",
     #self.screens, #added, #updated, #removed, #storage.added, #storage.removed, #notes > 0 and ("; " .. table.concat(notes, ", ")) or ""))
-  return { storage = storage, screens = { added = added, updated = updated, removed = removed }, notes = notes }
+  return { storage = storage, screens = { added = added, updated = updated, removed = removed }, stats = { added = sAdded, updated = sUpdated, removed = sRemoved }, notes = notes }
+end
+
+function ops.statscreens(self)
+  local out = {}
+  for i, scCfg in ipairs(self.cfg.stats or {}) do
+    local live
+    for _, s in ipairs(self.statScreens) do
+      if s.cfg == scCfg then live = s end
+    end
+    out[i] = { name = scCfg.name, monitor = scCfg.monitor, show = scCfg.show, up = live ~= nil and live.ok or false }
+  end
+  return out
 end
 
 function ops.shutdown(self, a, req)
@@ -419,6 +506,15 @@ end
 ops["debug.screen"] = function(self, a, req)
   if req.transport ~= "local" then error("debug ops are only allowed from the warehouse computer", 0) end
   return self:accessPoint(a.access):screenLines()
+end
+
+-- The drawn text of a stat screen, by name or position.
+ops["debug.stats"] = function(self, a, req)
+  if req.transport ~= "local" then error("debug ops are only allowed from the warehouse computer", 0) end
+  for i, sc in ipairs(self.statScreens) do
+    if sc.name == a.name or i == tonumber(a.name) or (a.name == nil and i == 1) then return sc:screenLines() end
+  end
+  error("no such stat screen: " .. tostring(a.name), 0)
 end
 
 ops["debug.touch"] = function(self, a, req)

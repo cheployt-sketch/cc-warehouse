@@ -15,6 +15,11 @@ C.defaults = {
   -- otherwise). Without a pin the screen never locks; with one it locks
   -- again lockAfter seconds after the last tap (0: only when Lock is tapped).
   access = {},
+  -- Stat screens: monitors that show charts of what the warehouse does.
+  -- { name = "Stats", monitor = "monitor_3", scale = 0.5, show = { "fill",
+  -- "items", "flow", "moves", "top", "kinds", "parcels", "crafter",
+  -- "screens", "service" } }; leave show out for everything.
+  stats = {},
   -- Relock time for access points that have a pin but no lockAfter of their own.
   lockAfter = 120,
   -- Item categories the screens could not work out by themselves:
