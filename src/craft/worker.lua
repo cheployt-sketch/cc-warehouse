@@ -87,6 +87,38 @@ local function sidesFor(cfg, req)
   else
     outSide = sideOf(req.output, cfg.output)
   end
+  if not found and not hasChest(inSide) then
+    -- No names (an older service), or chests it cannot see on the network
+    -- (a wireless modem), and nothing on the configured side: use the
+    -- chests that are there. The one holding the first item asked for is
+    -- the input; another one, if any, the output.
+    local have = {}
+    for _, side in ipairs({ "front", "top", "bottom" }) do
+      if hasChest(side) then have[#have + 1] = side end
+    end
+    if #have > 0 then
+      local first = req.grid and req.grid[1] and req.grid[1].name
+      inSide = nil
+      for _, side in ipairs(have) do
+        local ok, list = pcall(peripheral.call, side, "list")
+        if ok and type(list) == "table" then
+          for _, it in pairs(list) do
+            if it.name == first then inSide = side break end
+          end
+        end
+        if inSide then break end
+      end
+      inSide = inSide or (hasChest(cfg.input) and cfg.input) or have[1]
+      if hasChest(cfg.output) and cfg.output ~= inSide then
+        outSide = cfg.output
+      else
+        outSide = inSide
+        for _, side in ipairs(have) do
+          if side ~= inSide then outSide = side end
+        end
+      end
+    end
+  end
   if cfg.say and (inSide ~= cfg.shownIn or outSide ~= cfg.shownOut) then
     cfg.shownIn, cfg.shownOut = inSide, outSide
     cfg.say("Taking from the " .. inSide .. " chest, dropping into the " .. outSide .. " one" .. (found and " (found by their contents)" or ""))
@@ -228,6 +260,7 @@ local function handle(cfg, req)
 end
 
 function W.configPath(root) return fs.combine(root, "data/crafter.worker") end
+W.sidesFor = sidesFor -- for tests
 
 -- Runs forever. opts: root (the warehouse folder), key (the warehouse
 -- key), input and output (sides: front, top or bottom), print(msg).

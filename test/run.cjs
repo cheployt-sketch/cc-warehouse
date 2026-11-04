@@ -6,7 +6,7 @@ const path = require("path");
 const fengari = require("F:/cc-tweaked/cc-control-panel/node_modules/fengari");
 const { lua, lauxlib, lualib, to_luastring } = fengari;
 
-const SUITES = { sim: "sim.lua", crafter: "crafter.lua" };
+const SUITES = { sim: "sim.lua", crafter: "crafter.lua", sides: "sides.lua" };
 const slashes = (p) => p.split(path.sep).join("/");
 const src = slashes(path.join(__dirname, "..", "src"));
 
