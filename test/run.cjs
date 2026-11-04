@@ -2,11 +2,13 @@
 // with src/ on the module path. No names: every suite.
 //   sim      test/sim.lua      the index logic against simulated inventories
 //   crafter  test/crafter.lua  the crafter service against a simulated vault, turtle and smelter
+//   screen   test/screen.lua   an access point screen against a simulated monitor, chest and service
+//   sides    test/sides.lua    the crafter worker choosing its chest sides
 const path = require("path");
 const fengari = require("F:/cc-tweaked/cc-control-panel/node_modules/fengari");
 const { lua, lauxlib, lualib, to_luastring } = fengari;
 
-const SUITES = { sim: "sim.lua", crafter: "crafter.lua", sides: "sides.lua" };
+const SUITES = { sim: "sim.lua", crafter: "crafter.lua", screen: "screen.lua", sides: "sides.lua" };
 const slashes = (p) => p.split(path.sep).join("/");
 const src = slashes(path.join(__dirname, "..", "src"));
 

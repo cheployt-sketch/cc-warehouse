@@ -203,6 +203,8 @@ end
 
 function R.path(root) return fs.combine(root, "data/crafter/recipes") end
 
+-- Returns the recipes and the folders the file declares (lib.folders: a
+-- recipe is in a folder when its `folder` names one).
 function R.load(root)
   local t = util.readTable(R.path(root))
   local list = t and t.recipes or {}
@@ -213,11 +215,11 @@ function R.load(root)
     rec.mode = rec.mode or "off"
     rec.count = tonumber(rec.count) or 1
   end
-  return list
+  return list, t and t.folders or {}
 end
 
-function R.save(root, list)
-  return util.writeTable(R.path(root), { recipes = list })
+function R.save(root, list, folders)
+  return util.writeTable(R.path(root), { recipes = list, folders = folders or {} })
 end
 
 function R.newId(list)

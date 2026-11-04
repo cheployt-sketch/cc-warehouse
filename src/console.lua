@@ -2,9 +2,11 @@
 --
 -- Pages: Status (what is stored, screens, network, and buttons to reload,
 -- compact, rescan or stop), Screens (add, change, remove access points),
--- Storage (what counts as storage, with a button per inventory), Settings
--- (presets, lock time, rescan, hostname, rednet, log level, category
--- overrides, the pairing key) and Log. Everything is clicked; text fields
+-- Storage (what counts as storage, with a button per inventory), Parcels
+-- (the Parcel tasks, in folders), Settings (presets, lock time, rescan,
+-- hostname, rednet, log level, category overrides, the pairing key) and
+-- Log. The chest and monitor pickers say what each one is used for (a
+-- screen, a Parcel task, the crafter) and list the free ones first. Everything is clicked; text fields
 -- take typing, Tab moves on, Esc backs out.
 --
 -- Changes are written to the config file and applied to the running
@@ -15,6 +17,8 @@ local util = require("lib.util")
 local config = require("lib.config")
 local category = require("lib.category")
 local UI = require("lib.ui")
+local Uses = require("lib.uses")
+local Folders = require("lib.folders")
 local Parcel = require("parcel")
 
 local Console = {}
@@ -82,6 +86,8 @@ function Console.new(opts)
   self.hint = ""
   self.data = {}
   self.storageOffset = 0
+  self.parcelOffset = 0
+  self.parcelFolder = nil -- the open folder on the Parcels page
   self.logOffset = 0
   self.running = true
   return self
@@ -391,32 +397,109 @@ local function ago(epochMs)
   return math.floor(s / 3600) .. "h ago"
 end
 
+-- The Parcels page: the folders (lib.folders) and the tasks in none, or
+-- the tasks of the open folder. Tasks go into a folder from their form.
 function Console:drawParcels(y1, y2)
   local ui, w = self.ui, self.ui.w
-  local tasks = (self.data.parcels or {}).tasks or {}
+  local cfg = self.data.parcels or { tasks = {} }
+  cfg.tasks = cfg.tasks or {}
+  cfg.folders = cfg.folders or {}
   local stats = self.data.pstats or {}
-  ui:text(1, y1, util.fit(" Name        Kind     Inventory           Last run", w), ui:col("yellow"))
-  local y = y1 + 1
-  if #tasks == 0 then ui:text(2, y, "No tasks yet. Add one below.", ui:col("lightGray", colors.white)) end
-  for i, t in ipairs(tasks) do
-    if y >= y2 - 1 then break end
-    local s = stats[t.id] or {}
-    local last = (t.enabled == false) and "off" or (ago(s.lastRun) .. (s.lastMoved and (" +" .. s.lastMoved) or ""))
-    local line = " " .. util.fit(tostring(t.name or t.id), 11) .. " " .. util.fit(t.kind or "?", 8) .. " " .. util.fit(tostring(t.inventory or ""), 19) .. " " .. last
-    local col = colors.white
-    if t.enabled == false then col = ui:col("lightGray", colors.white) elseif (s.errors or 0) > 0 and s.lastMoved == 0 and s.lastMessage then col = ui:col("orange", colors.white) end
-    ui:text(1, y, util.fit(line, w), col)
-    ui:region(1, y, w, y, function() self:openParcelForm(i) end)
-    y = y + 1
+  local open = self.parcelFolder
+  local view = Folders.view(cfg.folders, cfg.tasks, open)
+  local rows = {}
+  for _, f in ipairs(view.folders) do rows[#rows + 1] = { folder = f } end
+  for _, it in ipairs(view.items) do rows[#rows + 1] = { task = it.entry, index = it.index } end
+  local head = open and util.fit(open .. "/", 11) or "Name       "
+  ui:text(1, y1, util.fit(" " .. head .. " Kind     Inventory           Last run", w), ui:col("yellow"))
+  local visible = y2 - y1 - 1
+  self.parcelOffset = util.clamp(self.parcelOffset, 0, math.max(0, #rows - visible))
+  if #rows == 0 then
+    ui:text(2, y1 + 1, open and "No tasks in this folder yet. Add one below." or "No tasks yet. Add one below.", ui:col("lightGray", colors.white))
   end
-  ui:button(2, y2, "Add task", function() self:openParcelForm(nil) end, { bg = ui:col("green", colors.black) })
-  self.hint = "Click a task to change, run or remove it."
+  for i = 1, visible do
+    local r = rows[i + self.parcelOffset]
+    if not r then break end
+    local y = y1 + i
+    if r.folder then
+      local f = r.folder
+      ui:text(1, y, util.fit(" + " .. f.name .. "  (" .. f.count .. (f.count == 1 and " task)" or " tasks)"), w), ui:col("lightBlue", colors.white))
+      ui:region(1, y, w, y, function()
+        self.parcelFolder = f.name
+        self.parcelOffset = 0
+      end)
+    else
+      local t, s = r.task, stats[r.task.id] or {}
+      local last = (t.enabled == false) and "off" or (ago(s.lastRun) .. (s.lastMoved and (" +" .. s.lastMoved) or ""))
+      local line = " " .. util.fit(tostring(t.name or t.id), 11) .. " " .. util.fit(t.kind or "?", 8) .. " " .. util.fit(tostring(t.inventory or ""), 19) .. " " .. last
+      local col = colors.white
+      if t.enabled == false then col = ui:col("lightGray", colors.white) elseif (s.errors or 0) > 0 and s.lastMoved == 0 and s.lastMessage then col = ui:col("orange", colors.white) end
+      ui:text(1, y, util.fit(line, w), col)
+      local index = r.index
+      ui:region(1, y, w, y, function() self:openParcelForm(index) end)
+    end
+  end
+  local x = ui:button(2, y2, "Add task", function() self:openParcelForm(nil, open) end, { bg = ui:col("green", colors.black) }) + 1
+  if open then
+    x = ui:button(x, y2, "Back", function()
+      self.parcelFolder = nil
+      self.parcelOffset = 0
+    end) + 1
+    if self.confirmFolder and os.clock() < self.confirmFolder then
+      ui:button(x, y2, "Really remove", function()
+        self.confirmFolder = nil
+        local moved = Folders.remove(cfg.folders, cfg.tasks, open)
+        Parcel.saveConfig(self.root, cfg)
+        self.parcelFolder, self.parcelOffset = nil, 0
+        self:say("Folder " .. open .. " removed" .. (moved > 0 and ("; " .. moved .. " task(s) are back at the top level") or ""))
+        self:refresh()
+      end, { bg = ui:col("red", colors.black) })
+    else
+      ui:button(x, y2, "Remove folder", function()
+        self.confirmFolder = os.clock() + 5
+        self:say("Click 'Really remove' to remove the folder " .. open .. " (its tasks stay, at the top level)", true)
+      end, { bg = ui:col("red", colors.black) })
+    end
+    self.hint = "Folder " .. open .. ": click a task to change, run or remove it. Wheel scrolls."
+  else
+    ui:button(x, y2, "New folder", function() self:openFolderForm() end)
+    self.hint = "Click a task to change it, a folder to open it. Wheel scrolls."
+  end
 end
 
-function Console:openParcelForm(index)
+function Console:openFolderForm()
+  self.form = {
+    kind = "folder",
+    title = "New folder",
+    fields = { { label = "Name", key = "name", f = UI.newField("", { max = Folders.MAX }), w = 18, hint = "tasks join it from their form" } },
+    hint = "Type a name and click Save. Esc: cancel.",
+  }
+  self.ui.focus = self.form.fields[1].f
+end
+
+function Console:saveFolderForm()
+  local cfg = self.data.parcels
+  cfg.folders = cfg.folders or {}
+  local name, err = Folders.add(cfg.folders, cfg.tasks or {}, self:formValue("name"))
+  if not name then
+    self:say(err, true)
+    return
+  end
+  if Parcel.saveConfig(self.root, cfg) then
+    self.parcelFolder, self.parcelOffset = name, 0
+    self:say("Folder " .. name .. " made: add tasks to it, or move tasks in from their form")
+  else
+    self:say("Could not write " .. Parcel.configPath(self.root), true)
+  end
+  self.form, self.ui.focus = nil, nil
+  self:refresh()
+end
+
+-- folder: the folder a new task starts in (the open one).
+function Console:openParcelForm(index, folder)
   local cfg = self.data.parcels
   cfg.tasks = cfg.tasks or {}
-  local t = index and cfg.tasks[index] or { kind = "deposit", interval = 5, items = {} }
+  local t = index and cfg.tasks[index] or { kind = "deposit", interval = 5, items = {}, folder = folder }
   local s = (self.data.pstats or {})[t.id or ""] or {}
   local form = {
     kind = "parcel",
@@ -426,6 +509,7 @@ function Console:openParcelForm(index)
       { label = "Name", key = "name", f = UI.newField(t.name, { max = 20 }), w = 18 },
       { label = "Kind", key = "kind", cycle = KINDS, value = t.kind or "deposit", w = 10, hint = "into the vault / out of it" },
       { label = "Inventory", key = "inventory", f = UI.newField(t.inventory, { max = 40 }), w = 26, pick = "inventory" },
+      { label = "Folder", key = "folder", f = UI.newField(t.folder, { max = Folders.MAX }), w = 18, pick = "folder", hint = "blank: top level" },
       { label = "Items", key = "items", f = UI.newField(Parcel.formatItems(t.kind or "deposit", t.items), { max = 400 }), w = 30, fill = true },
       { label = "Every", key = "interval", f = UI.newField(t.interval or 5, { max = 6, filter = "%d" }), w = 6, hint = "seconds" },
       { label = "Max/run", key = "maxPerRun", f = UI.newField(t.maxPerRun, { max = 7, filter = "%d" }), w = 7, hint = "items, blank: no cap" },
@@ -524,6 +608,9 @@ function Console:saveParcelForm()
   end
   local old = form.index and cfg.tasks[form.index] or {}
   local t = { id = old.id or Parcel.newId(cfg), name = name ~= "" and name or nil, kind = kind, inventory = inventory, items = items }
+  cfg.folders = cfg.folders or {}
+  t.folder = Folders.resolve(cfg.folders, cfg.tasks, self:formValue("folder"))
+  if t.folder then Folders.add(cfg.folders, {}, t.folder) end -- a folder typed here is declared too
   t.interval = tonumber(self:formValue("interval")) or 5
   t.maxPerRun = tonumber(self:formValue("maxPerRun"))
   t.totalLimit = tonumber(self:formValue("totalLimit"))
@@ -549,6 +636,8 @@ function Console:saveForm()
   local cfg = self.data.cfg
   if form.kind == "parcel" then
     self:saveParcelForm()
+  elseif form.kind == "folder" then
+    self:saveFolderForm()
   elseif form.kind == "screen" then
     local name, chest, monitor = self:formValue("name"), self:formValue("chest"), self:formValue("monitor")
     if name == "" or chest == "" or monitor == "" then
@@ -590,23 +679,35 @@ function Console:removeScreen(index)
   self:apply(cfg, "Screen " .. tostring(ap and ap.name) .. " removed")
 end
 
+-- Pickers: inventories and monitors with what each is used for (lib.uses),
+-- free ones first; folders for a task.
 function Console:openPicker(fd)
-  local items = {}
+  local items, title, hint = {}, "Pick one", "Click one."
   if fd.pick == "inventory" then
-    for _, p in ipairs(self:refreshPeripherals()) do
-      items[#items + 1] = { label = util.fit(p.name, 28) .. util.rfit(p.size, 5) .. "  " .. p.role .. (p.access and (" " .. p.access) or ""), value = p.name }
+    for _, r in ipairs(Uses.inventories(self.root, self.data.cfg, self:refreshPeripherals())) do
+      items[#items + 1] = { label = Uses.line(r), value = r.name, busy = r.busy }
     end
+    title, hint = "Pick an inventory", "Free ones first; gray: used by a screen, a task or the crafter."
+  elseif fd.pick == "monitor" then
+    for _, r in ipairs(Uses.monitors(self.root, self.data.cfg)) do
+      items[#items + 1] = { label = Uses.line(r), value = r.name, busy = r.busy }
+    end
+    title, hint = "Pick a monitor", "Free ones first; gray: used by a screen or the crafter."
   else
-    for _, m in ipairs(config.monitors()) do items[#items + 1] = { label = m, value = m } end
+    local cfg = self.data.parcels or {}
+    items[#items + 1] = { label = "(top level: no folder)", value = "" }
+    for _, n in ipairs(Folders.names(cfg.folders, cfg.tasks)) do items[#items + 1] = { label = n, value = n } end
+    title = "Pick a folder"
   end
   if #items == 0 then
     self:say("Nothing of that kind is on the network", true)
     return
   end
   self.picker = {
-    title = "Pick a" .. (fd.pick == "inventory" and "n inventory" or " monitor"),
+    title = title,
     items = items,
     offset = 0,
+    hint = hint,
     onPick = function(v)
       fd.f.text = v
       fd.f.cursor = #v + 1
@@ -624,14 +725,14 @@ function Console:drawPicker(y1, y2)
     local it = pk.items[i + pk.offset]
     if not it then break end
     local y = y1 + i
-    ui:text(2, y, util.fit(it.label, w - 2))
+    ui:text(2, y, util.fit(it.label, w - 2), it.busy and ui:col("lightGray", colors.white) or colors.white)
     ui:region(1, y, w, y, function()
       pk.onPick(it.value)
       self.picker = nil
     end)
   end
   ui:button(2, y2, "Cancel", function() self.picker = nil end)
-  self.hint = #pk.items > visible and "Scroll with the mouse wheel." or "Click one."
+  self.hint = (#pk.items > visible and "Wheel scrolls. " or "") .. (pk.hint or "Click one.")
 end
 
 function Console:storageRows()
@@ -881,6 +982,8 @@ function Console:scroll(dir)
     self.picker.offset = self.picker.offset + dir
   elseif self.page == "storage" then
     self.storageOffset = self.storageOffset + dir
+  elseif self.page == "parcels" and not self.form then
+    self.parcelOffset = self.parcelOffset + dir
   elseif self.page == "log" then
     self.logOffset = self.logOffset - dir
   end
@@ -915,6 +1018,11 @@ function Console:run()
       dirty = true
     elseif e == "term_resize" then
       self.ui:resize()
+      dirty = true
+    elseif e == "warehouse_click" then
+      -- a test hook: a click handed over by the service (debug.click),
+      -- which reaches this tab even when it is not the focused one
+      self.ui:tap(ev[2], ev[3])
       dirty = true
     elseif e == "timer" and (ev[2] == timer or os.clock() >= due) then
       if not self.form and not self.picker then self:refresh() end

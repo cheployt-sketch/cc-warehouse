@@ -215,8 +215,10 @@ function Client:count(item) return must(self, "count", { item = item }) end
 
 -- Moves `count` of `item` into inventory `to` (slot `toSlot` or anywhere).
 -- Returns the number moved and, when fewer, the reason.
-function Client:withdraw(item, count, to, toSlot)
-  local r = must(self, "withdraw", { item = item, count = count, to = to, toSlot = toSlot })
+-- opts: recent = false keeps the move off the screens' Recent tab (for
+-- automation that moves things all day, like the Parcel Service).
+function Client:withdraw(item, count, to, toSlot, opts)
+  local r = must(self, "withdraw", { item = item, count = count, to = to, toSlot = toSlot, recent = opts and opts.recent })
   return r.moved, r.message
 end
 
@@ -225,7 +227,7 @@ end
 -- not everything could be stored.
 function Client:deposit(from, opts)
   opts = opts or {}
-  local r = must(self, "deposit", { from = from, slot = opts.slot, slots = opts.slots, item = opts.item, count = opts.count })
+  local r = must(self, "deposit", { from = from, slot = opts.slot, slots = opts.slots, item = opts.item, count = opts.count, recent = opts.recent })
   return r.moved, r.items, r.message
 end
 

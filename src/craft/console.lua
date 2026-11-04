@@ -1,14 +1,17 @@
 -- craft.console: the crafter's control panel on the computer's own screen.
 --
 -- Pages: Recipes (every recipe with its mode, what it made and what it is
--- doing; click one to change it: name, mode, rate, the steps, with Scan
--- buttons that read a step off the recipe chest, and Run, Order, Stop,
--- Remove), Setup (the turtle, the chests and the monitor, with pickers)
--- and Log. Everything is clicked; text fields take typing, Tab moves on,
+-- doing, in folders; click one to change it: name, mode, rate, folder,
+-- the steps, with Scan buttons that read a step off the recipe chest, and
+-- Run, Order, Stop, Remove), Setup (the turtle, the chests and the
+-- monitor, with pickers that say what each one is used for and list the
+-- free ones first) and Log. Everything is clicked; text fields take typing, Tab moves on,
 -- Esc backs out. Changes apply to the running service at once.
 
 local util = require("lib.util")
 local UI = require("lib.ui")
+local Uses = require("lib.uses")
+local Folders = require("lib.folders")
 local Recipes = require("craft.recipes")
 local Engine = require("craft.engine")
 
@@ -55,6 +58,7 @@ function Console.new(opts)
   self.message, self.messageError, self.messageUntil = nil, false, 0
   self.hint = ""
   self.listOffset, self.logOffset = 0, 0
+  self.recipeFolder = nil -- the open folder on the Recipes page
   self.running = true
   return self
 end
@@ -94,6 +98,8 @@ function Console:draw()
   local y1, y2 = 3, h - 1
   if self.picker then
     self:drawPicker(y1, y2)
+  elseif self.form and self.form.kind == "folder" then
+    self:drawFolderForm(y1, y2)
   elseif self.form then
     self:drawForm(y1, y2)
   elseif self.page == "setup" then
@@ -108,34 +114,105 @@ function Console:draw()
   ui:finish()
 end
 
+-- The Recipes page: the folders (lib.folders) and the recipes in none, or
+-- the recipes of the open folder. A recipe goes into a folder from its
+-- form.
 function Console:drawRecipes(y1, y2)
   local ui, w = self.ui, self.ui.w
-  local list = self.status.recipes
-  ui:text(1, y1, util.fit(" Name             Mode    Made    State", w), ui:col("yellow"))
+  local open = self.recipeFolder
+  local view = Folders.view(self.engine.folders, self.status.recipes, open)
+  local rows = {}
+  for _, f in ipairs(view.folders) do rows[#rows + 1] = { folder = f } end
+  for _, it in ipairs(view.items) do rows[#rows + 1] = { recipe = it.entry } end
+  local head = open and util.fit(open .. "/", 16) or "Name            "
+  ui:text(1, y1, util.fit(" " .. head .. " Mode    Made    State", w), ui:col("yellow"))
   local visible = y2 - y1 - 1
-  self.listOffset = util.clamp(self.listOffset, 0, math.max(0, #list - visible))
-  if #list == 0 then
-    ui:text(2, y1 + 1, "No recipes yet. Lay one out in the recipe chest,", ui:col("lightGray", colors.white))
-    ui:text(2, y1 + 2, "then click 'New recipe' and 'Scan craft'.", ui:col("lightGray", colors.white))
+  self.listOffset = util.clamp(self.listOffset, 0, math.max(0, #rows - visible))
+  if #rows == 0 then
+    if open then
+      ui:text(2, y1 + 1, "No recipes in this folder yet.", ui:col("lightGray", colors.white))
+    else
+      ui:text(2, y1 + 1, "No recipes yet. Lay one out in the recipe chest,", ui:col("lightGray", colors.white))
+      ui:text(2, y1 + 2, "then click 'New recipe' and 'Scan craft'.", ui:col("lightGray", colors.white))
+    end
   end
   for i = 1, visible do
-    local s = list[i + self.listOffset]
-    if not s then break end
+    local r = rows[i + self.listOffset]
+    if not r then break end
     local y = y1 + i
-    local mode = s.mode == "rate" and (tostring(s.rateCount) .. "/" .. tostring(s.rateSeconds) .. "s") or s.mode
-    local line = " " .. util.fit(s.name, 16) .. " " .. util.fit(mode, 7) .. " " .. util.rfit(util.fmtCount(s.made, 6), 6) .. "  " .. s.text
-    ui:text(1, y, util.fit(line, w), self:stateColor(s.state))
-    ui:region(1, y, w, y, function() self:openRecipeForm(s.id) end)
+    if r.folder then
+      local f = r.folder
+      ui:text(1, y, util.fit(" + " .. f.name .. "  (" .. f.count .. (f.count == 1 and " recipe)" or " recipes)"), w), ui:col("lightBlue", colors.white))
+      ui:region(1, y, w, y, function()
+        self.recipeFolder = f.name
+        self.listOffset = 0
+      end)
+    else
+      local s = r.recipe
+      local mode = s.mode == "rate" and (tostring(s.rateCount) .. "/" .. tostring(s.rateSeconds) .. "s") or s.mode
+      local line = " " .. util.fit(s.name, 16) .. " " .. util.fit(mode, 7) .. " " .. util.rfit(util.fmtCount(s.made, 6), 6) .. "  " .. s.text
+      ui:text(1, y, util.fit(line, w), self:stateColor(s.state))
+      ui:region(1, y, w, y, function() self:openRecipeForm(s.id) end)
+    end
   end
   local x = ui:button(2, y2, "New recipe", function() self:openRecipeForm(nil) end, { bg = ui:col("green", colors.black) }) + 1
+  if open then
+    x = ui:button(x, y2, "Back", function()
+      self.recipeFolder = nil
+      self.listOffset = 0
+    end) + 1
+    if self.confirmFolder and os.clock() < self.confirmFolder then
+      x = ui:button(x, y2, "Really remove", function()
+        self.confirmFolder = nil
+        local ok, moved = pcall(self.engine.removeFolder, self.engine, open)
+        if ok then
+          self.recipeFolder, self.listOffset = nil, 0
+          self:say("Folder " .. open .. " removed" .. (moved > 0 and ("; " .. moved .. " recipe(s) are back at the top level") or ""))
+        else
+          self:say(tostring(moved), true)
+        end
+      end, { bg = ui:col("red", colors.black) }) + 1
+    else
+      x = ui:button(x, y2, "Remove folder", function()
+        self.confirmFolder = os.clock() + 5
+        self:say("Click 'Really remove' to remove the folder " .. open .. " (its recipes stay, at the top level)", true)
+      end, { bg = ui:col("red", colors.black) }) + 1
+    end
+    self.hint = "Folder " .. open .. ": click a recipe to change, run or stop it. Wheel scrolls."
+  else
+    x = ui:button(x, y2, "New folder", function() self:openFolderForm() end) + 1
+    self.hint = "Click a recipe to change, run or stop it; a folder to open it. Wheel scrolls."
+  end
   if self.standalone then ui:button(x, y2, "Quit", function() self.running = false end) end
-  self.hint = "Click a recipe to change, run or stop it. Wheel scrolls."
+end
+
+function Console:openFolderForm()
+  self.form = { kind = "folder", name = UI.newField("", { max = Folders.MAX }) }
+  self.ui.focus = self.form.name
+end
+
+function Console:drawFolderForm(y1, y2)
+  local ui, w = self.ui, self.ui.w
+  local f = self.form
+  ui:text(1, y1, util.fit(" New folder", w), ui:col("yellow"))
+  ui:text(2, y1 + 1, "Name")
+  ui:field(7, y1 + 1, 18, f.name)
+  ui:text(2, y1 + 3, util.fit("A recipe joins a folder from its form (the folder button by the steps).", w - 1), ui:col("lightGray", colors.white))
+  local x = ui:button(2, y2, "Save", function()
+    local ok, res = pcall(self.engine.addFolder, self.engine, f.name.text)
+    if not ok then return self:say(tostring(res), true) end
+    self.form, self.ui.focus = nil, nil
+    self.recipeFolder, self.listOffset = res, 0
+    self:say("Folder " .. res .. " made")
+  end, { bg = ui:col("green", colors.black) }) + 1
+  ui:button(x, y2, "Cancel", function() self.form, self.ui.focus = nil, nil end)
+  self.hint = "Type a name and click Save. Esc: back."
 end
 
 -- The recipe form works on a copy; Save hands it to the engine.
 function Console:openRecipeForm(id)
   local rec = id and self.engine:find(id)
-  local r = rec and copy(rec) or { name = "", mode = "off", count = 1, steps = {} }
+  local r = rec and copy(rec) or { name = "", mode = "off", count = 1, steps = {}, folder = self.recipeFolder }
   self.form = {
     kind = "recipe",
     id = rec and rec.id or nil,
@@ -228,7 +305,10 @@ function Console:drawForm(y1, y2)
   ui:text(2, y, "Steps", ui:col("yellow"))
   local x = ui:button(9, y, "Scan craft", function() self:scanStep("craft") end) + 1
   x = ui:button(x, y, "Scan smelt", function() self:scanStep("smelt") end) + 1
-  ui:text(x, y, util.fit("adds what the recipe chest holds", w - x + 1), ui:col("lightGray", colors.white))
+  -- The folder the recipe is filed in; the picker changes it.
+  ui:button(x, y, r.folder and ("in " .. r.folder) or "no folder", function()
+    self:openPicker("folder", function(v) r.folder = v ~= "" and v or nil end)
+  end, { w = w - x + 1, align = "left" })
   y = y + 1
   if #r.steps == 0 then
     ui:text(3, y, "none yet: lay the first step out in the recipe chest and scan it", ui:col("lightGray", colors.white))
@@ -360,7 +440,14 @@ function Console:drawSetup(y1, y2)
     local fw = s.w or 24
     ui:field(15, y, fw, fields[s.key])
     local x = 15 + fw + 1
-    if s.pick then x = ui:button(x, y, "Pick", function() self:openPicker(fields[s.key], s.pick) end) + 1 end
+    if s.pick then
+      x = ui:button(x, y, "Pick", function()
+        self:openPicker(s.pick, function(v)
+          local f = fields[s.key]
+          f.text, f.cursor = v, #v + 1
+        end)
+      end) + 1
+    end
     ui:text(x, y, util.fit(s.hint, w - x + 1), ui:col("lightGray", colors.white))
     y = y + 1
   end
@@ -398,28 +485,26 @@ function Console:drawSetup(y1, y2)
   self.hint = "Pick inventories from the network. Save applies at once."
 end
 
-function Console:openPicker(field, kind)
-  local items = {}
+-- Pickers: inventories and monitors with what each is used for (lib.uses),
+-- free ones first; the turtles; the recipe folders. onPick(value) gets the
+-- choice.
+function Console:openPicker(kind, onPick)
+  local items, hint = {}, "Click one."
   if kind == "inventory" then
     local ok, list = pcall(self.vault.peripherals)
-    for _, p in ipairs(ok and list or {}) do
-      items[#items + 1] = { label = util.fit(p.name, 28) .. util.rfit(p.size, 5) .. "  " .. p.role .. (p.access and (" " .. p.access) or ""), value = p.name }
+    for _, r in ipairs(Uses.inventories(self.root, nil, ok and list or {})) do
+      items[#items + 1] = { label = Uses.line(r), value = r.name, busy = r.busy }
     end
+    hint = "Free ones first; gray: used by a screen, a task or the crafter."
   elseif kind == "monitor" then
-    local used = {}
-    local ok, cfg = pcall(self.vault.config)
-    for _, ap in ipairs(ok and cfg.access or {}) do used[ap.monitor] = ap.name or ap.monitor end
-    local names = peripheral.getNames()
-    table.sort(names)
-    for _, n in ipairs(names) do
-      if peripheral.hasType(n, "monitor") then
-        if used[n] then
-          items[#items + 1] = { label = util.fit(n, 20) .. "  access screen " .. used[n] .. " (not available)", value = nil }
-        else
-          items[#items + 1] = { label = n, value = n }
-        end
-      end
+    -- an access point's monitor is never the dashboard
+    for _, r in ipairs(Uses.monitors(self.root)) do
+      items[#items + 1] = { label = Uses.line(r) .. (r.screen and " - taken" or ""), value = (not r.screen) and r.name or nil, busy = r.busy }
     end
+    hint = "Free ones first; gray: in use. A screen keeps its monitor."
+  elseif kind == "folder" then
+    items[#items + 1] = { label = "(no folder)", value = "" }
+    for _, n in ipairs(Folders.names(self.engine.folders, self.engine.recipes)) do items[#items + 1] = { label = n, value = n } end
   else
     for _, n in ipairs(peripheral.getNames()) do
       if peripheral.hasType(n, "turtle") then
@@ -434,12 +519,13 @@ function Console:openPicker(field, kind)
     return
   end
   self.picker = {
-    title = "Pick a " .. kind .. " (Esc: back)",
+    title = "Pick " .. (kind == "inventory" and "an inventory" or ("a " .. kind)) .. " (Esc: back)",
     items = items,
     offset = 0,
+    hint = hint,
     onPick = function(v)
       if v == nil then return self:say("That monitor belongs to an access point", true) end
-      field.text, field.cursor = v, #v + 1
+      onPick(v)
     end,
   }
 end
@@ -454,14 +540,14 @@ function Console:drawPicker(y1, y2)
     local it = pk.items[i + pk.offset]
     if not it then break end
     local y = y1 + i
-    ui:text(2, y, util.fit(it.label, w - 2), it.value == nil and ui:col("lightGray", colors.white) or colors.white)
+    ui:text(2, y, util.fit(it.label, w - 2), (it.value == nil or it.busy) and ui:col("lightGray", colors.white) or colors.white)
     ui:region(1, y, w, y, function()
       pk.onPick(it.value)
       if it.value ~= nil then self.picker = nil end
     end)
   end
   ui:button(2, y2, "Cancel", function() self.picker = nil end)
-  self.hint = #pk.items > visible and "Scroll with the mouse wheel." or "Click one."
+  self.hint = (#pk.items > visible and "Wheel scrolls. " or "") .. (pk.hint or "Click one.")
 end
 
 -- Log ----------------------------------------------------------------------

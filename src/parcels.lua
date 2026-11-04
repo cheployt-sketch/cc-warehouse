@@ -20,7 +20,7 @@ if cmd == "list" then
   end
   for _, t in ipairs(cfg.tasks) do
     local s = stats[t.id] or {}
-    print(string.format("%-4s %-12s %-8s %-20s %s", t.id, tostring(t.name), t.kind, tostring(t.inventory), t.enabled == false and "off" or ("every " .. tostring(t.interval) .. "s")))
+    print(string.format("%-4s %-12s %-8s %-20s %s%s", t.id, tostring(t.name), t.kind, tostring(t.inventory), t.enabled == false and "off" or ("every " .. tostring(t.interval) .. "s"), t.folder and ("  [" .. t.folder .. "]") or ""))
     print("     items: " .. Parcel.formatItems(t.kind, t.items))
     print(string.format("     runs %d, moved %d, errors %d%s", s.runs or 0, s.moved or 0, s.errors or 0, s.lastMessage and (", last: " .. s.lastMessage) or ""))
   end

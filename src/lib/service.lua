@@ -211,8 +211,8 @@ Service.help = {
   { "items", "filter?, category?, sort?, limit?, offset?", "Everything stored: key, name, displayName, count, maxCount, category. category: block, item, resource, unstackable or recent; sort: count (default) or name." },
   { "item", "item", "One item with its stack locations. item: key, name or display name." },
   { "count", "item", "How many of an item are stored (a plain name counts every NBT variant)." },
-  { "withdraw", "item, count, to, toSlot?", "Move items out of storage into inventory `to`. Returns moved." },
-  { "deposit", "from, slot?, slots?, item?, count?", "Move items from inventory `from` into storage, onto existing stacks first. Returns moved and items." },
+  { "withdraw", "item, count, to, toSlot?, recent?", "Move items out of storage into inventory `to`. Returns moved. recent = false keeps it off the Recent list (for automation)." },
+  { "deposit", "from, slot?, slots?, item?, count?, recent?", "Move items from inventory `from` into storage, onto existing stacks first. Returns moved and items. recent = false as for withdraw." },
   { "move", "from, fromSlot, to, toSlot?, count?", "A raw move between any two inventories on the network." },
   { "compact", "", "Merge partial stacks so storage holds as few stacks as possible." },
   { "rescan", "inventory?", "Re-read storage (one inventory, or all) and fix the index." },
@@ -262,7 +262,7 @@ function ops.withdraw(self, a)
   if not key then error(err, 0) end
   local count = needCount(a, "count")
   local to = needName(a, "to")
-  local moved, why, code = self.index:withdraw(key, count, to, a.toSlot)
+  local moved, why, code = self.index:withdraw(key, count, to, a.toSlot, { recent = a.recent })
   if code == "refused" then error(why, 0) end
   local line = string.format("withdraw %d of %d x %s -> %s%s", moved, count, key, to, why and (" (" .. why .. ")") or "")
   if moved > 0 then self.log.info(line) else self.log.debug(line) end
@@ -271,7 +271,7 @@ end
 
 function ops.deposit(self, a)
   local from = needName(a, "from")
-  local moved, byKey, message, code = self.index:deposit(from, { slot = a.slot, slots = a.slots, item = a.item, count = a.count })
+  local moved, byKey, message, code = self.index:deposit(from, { slot = a.slot, slots = a.slots, item = a.item, count = a.count, recent = a.recent })
   if code == "refused" then error(message, 0) end
   local line = string.format("deposit %d from %s%s", moved, from, message and (" (" .. message .. ")") or "")
   if moved > 0 then self.log.info(line) else self.log.debug(line) end
@@ -429,7 +429,8 @@ ops["debug.touch"] = function(self, a, req)
 end
 
 -- The control panel in the service's tab: its text, and a click on it
--- (which reaches it only while its tab is the focused one).
+-- (as a warehouse_click event, which reaches its tab whether focused or
+-- not; a real mouse_click would only reach the focused tab).
 ops["debug.console"] = function(self, a, req)
   if req.transport ~= "local" then error("debug ops are only allowed from the warehouse computer", 0) end
   if not self.console then error("the control panel is not running in the service's tab", 0) end
@@ -438,7 +439,7 @@ end
 
 ops["debug.click"] = function(self, a, req)
   if req.transport ~= "local" then error("debug ops are only allowed from the warehouse computer", 0) end
-  os.queueEvent("mouse_click", 1, needCount(a, "x"), needCount(a, "y"))
+  os.queueEvent("warehouse_click", needCount(a, "x"), needCount(a, "y"))
   return true
 end
 

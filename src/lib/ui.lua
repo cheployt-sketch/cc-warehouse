@@ -217,29 +217,44 @@ end
 
 local KEY_ROWS = { "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm_-:" }
 
--- A five-row keyboard inside width w at (x, y). cb gets a character, or
--- "back", "clear" or "ok".
-function UI:keyboard(x, y, w, cb)
+-- The rows a keyboard takes: four rows of keys and one of space, back,
+-- clear and OK, each keyH high.
+function UI.keyboardHeight(keyH) return 5 * (keyH or 1) end
+
+-- A keyboard inside width w at (x, y). Keys are as wide as the width
+-- allows (ten to a row, one column apart; the gap counts as the key on its
+-- left when tapped) and o.keyH rows high (default 1), so they are easy to
+-- hit on a small text scale. cb gets a character, or "back", "clear" or
+-- "ok". Returns the rows used.
+function UI:keyboard(x, y, w, cb, o)
+  o = o or {}
+  local keyH = o.keyH or 1
+  local keyW = math.max(1, math.floor((w - 9) / 10))
   local keyBg = self:col("gray", colors.black)
+  local labelRow = math.floor((keyH - 1) / 2)
   for r, row in ipairs(KEY_ROWS) do
-    local rowW = #row * 2 - 1
+    local rowW = #row * (keyW + 1) - 1
     local x0 = x + math.max(0, math.floor((w - rowW) / 2))
-    local yy = y + r - 1
+    local yy = y + (r - 1) * keyH
     for i = 1, #row do
       local ch = row:sub(i, i)
-      local kx = x0 + (i - 1) * 2
-      self:text(kx, yy, ch, colors.white, keyBg)
-      self:region(kx, yy, kx + 1, yy, function() cb(ch) end)
+      local kx = x0 + (i - 1) * (keyW + 1)
+      for dy = 0, keyH - 1 do
+        self:text(kx, yy + dy, dy == labelRow and util.center(ch, keyW) or string.rep(" ", keyW), colors.white, keyBg)
+      end
+      self:region(kx, yy, kx + keyW, yy + keyH - 1, function() cb(ch) end)
     end
   end
-  local keys = { { "space", " " }, { "<-", "back" }, { "clear", "clear" }, { "OK", "ok" } }
-  local total = -1
-  for _, k in ipairs(keys) do total = total + #k[1] + 3 end
-  local bx = x + math.max(0, math.floor((w - total) / 2))
-  for _, k in ipairs(keys) do
-    bx = self:button(bx, y + 4, k[1], function() cb(k[2]) end, { bg = k[2] == "ok" and self:col("green", colors.black) or keyBg }) + 1
-  end
-  return 5
+  -- The bottom row spans a ten-key row; space takes what the others leave.
+  local fullW = 10 * (keyW + 1) - 1
+  local yb = y + 4 * keyH
+  local bx = x + math.max(0, math.floor((w - fullW) / 2))
+  local spaceW = math.max(7, fullW - (4 + 7 + 6 + 3))
+  bx = self:button(bx, yb, "space", function() cb(" ") end, { w = spaceW, h = keyH, bg = keyBg }) + 1
+  bx = self:button(bx, yb, "<-", function() cb("back") end, { w = 4, h = keyH, bg = keyBg }) + 1
+  bx = self:button(bx, yb, "clear", function() cb("clear") end, { w = 7, h = keyH, bg = keyBg }) + 1
+  self:button(bx, yb, "OK", function() cb("ok") end, { w = 6, h = keyH, bg = self:col("green", colors.black) })
+  return 5 * keyH
 end
 
 -- A 3x4 number pad at (x, y). o: keyW (default 3), keyH (default 1).

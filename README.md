@@ -83,7 +83,7 @@ Other commands: `warehouse key` (the pairing key), `warehouse log`, `warehouse s
 The warehouse computer's own screen shows a control panel: the service draws it in its tab (`console = true` in the config, the default), and `warehouse ui` opens it in any other tab. Click the shell tab at the top to get back to the command line.
 
 - **Status**: items, kinds, fill per storage inventory, the screens and whether they are up, network and uptime; buttons to reload the config, compact, rescan, and stop the service (click twice).
-- **Screens**: every access point with its chest, monitor and state. Click one to change it (name, chest, monitor, PIN, lock time, text scale, with pickers for the chest and monitor) or remove it; `Add screen` makes a new one.
+- **Screens**: every access point with its chest, monitor and state. Click one to change it (name, chest, monitor, PIN, lock time, text scale, with pickers for the chest and monitor) or remove it; `Add screen` makes a new one. The pickers say what every chest and monitor is already used for (a screen, a Parcel task, the crafter) and list the free ones first.
 - **Storage**: the storage types, and every inventory on the network with its role and fill: `Add`, `Exclude`, `Include` or `Remove` per row.
 - **Settings**: presets, stack presets, lock time, rescan period, hostname, rednet on/off, log level, your own item categories, and the pairing key.
 - **Log**: the service log, scrollable.
@@ -92,7 +92,7 @@ Everything is clicked; text fields take typing, Tab moves to the next field, Esc
 
 ## Parcel Service
 
-An app on the API that moves items by itself, task by task. The service hosts it (config `parcels = true`); `parcels` runs it on its own on any paired computer, `parcels list` shows the tasks. Tasks are edited on the panel's **Parcels** page (or in `/warehouse/parcels`), and changes apply at once.
+An app on the API that moves items by itself, task by task. The service hosts it (config `parcels = true`); `parcels` runs it on its own on any paired computer, `parcels list` shows the tasks. Tasks are edited on the panel's **Parcels** page (or in `/warehouse/parcels`), and changes apply at once. Folders keep a long list tidy: `New folder` makes one, a task joins it from its form (the Folder field, with a picker), `Remove folder` puts its tasks back at the top level. What tasks move does not show on the screens' `Recent` tab.
 
 - **Deposit tasks** take items from an inventory into the vault: everything, or only the listed items. Each listed item can have a limit: once the vault holds that many, the task stops taking it (`minecraft:wheat<2000`).
 - **Withdraw tasks** send items from the vault to an inventory. Each item has a keep-level (top the inventory up to this many: `minecraft:coal=64`), a per-run cap (`/32`) and a lifetime budget (`#1000`); without a keep-level it sends the per-run amount every run. The container's free space is the last limit, and the message says when it was.
@@ -126,7 +126,7 @@ crafter startup       start on every boot (the file is /startup/crafter.lua)
 crafter               start now, in a tab of its own with its panel
 ```
 
-`crafter setup` alone shows the settings (`turtle`, `input`, `output`, `recipeChest`, `smeltIn`, `smeltOut`, `monitor`, `scale`, `smeltStall`); the panel's Setup page has pickers for them. The turtle can be named by its name on the network (`turtle_2`: then the crafter can switch it on too) or by its ID.
+`crafter setup` alone shows the settings (`turtle`, `input`, `output`, `recipeChest`, `smeltIn`, `smeltOut`, `monitor`, `scale`, `smeltStall`); the panel's Setup page has pickers for them, which say what every chest and monitor is already used for and list the free ones first. The turtle can be named by its name on the network (`turtle_2`: then the crafter can switch it on too) or by its ID.
 
 On the turtle: put the warehouse folder there (`wget run https://raw.githubusercontent.com/cheployt-sketch/cc-warehouse/main/src/install.lua crafter`, or copy it), pair it with a floppy (`warehouse key disk` on the warehouse computer, `wh pair disk` on the turtle), then `crafter worker`. The worker works out which of the chests in front of, above and below it are the service's input and output chests by their contents, so it needs no settings (`crafter worker top bottom` names the sides to fall back on when two empty chests of one size cannot be told apart). The turtle only reaches the chest right in front of, above or below it, and that chest must also be on the warehouse's wired network (a wired modem on it), because the crafter fills it from the vault: a chest the turtle merely sees over the network is no use to it. `crafter startup` on the turtle keeps it going across reboots. After that the turtle keeps itself current: the worker reports the build of its folder, and a service whose folder was installed from the one-file build (it remembers where it came from) sends a turtle on another build there for the same one; the turtle fetches it, checks the build, installs and reboots. A turtle without HTTP or without `crafter startup` is told once and the State line says why.
 
@@ -146,10 +146,10 @@ Smelting: the inputs go into the smelter's input chest, and whatever lands in th
 
 ### Where it shows
 
-- **The panel on the computer** (the crafter's tab): Recipes (every recipe; click one to change, run, order or stop it), Setup, Log.
+- **The panel on the computer** (the crafter's tab): Recipes (every recipe, in folders: `New folder` makes one and the folder button on a recipe's form files it there; click a recipe to change, run, order or stop it), Setup, Log.
 - **The dashboard** on the monitor: every recipe and what it is doing; tap one for its stats and Run, Order (a number pad), Always and Stop.
 - **The Control Panel** (cc-control-panel's Crafter app): the same from the pocket computer.
-- **The shell**: `crafter status`, `crafter list`, `crafter scan`, `crafter add <name> [smelt]`, `crafter order <recipe> <n>`, `crafter run <recipe> [times]`, `crafter stop <recipe>`, `crafter set <recipe> mode=always|rate|off count= rateCount= rateSeconds= name=`, `crafter quit`.
+- **The shell**: `crafter status`, `crafter list`, `crafter scan`, `crafter add <name> [smelt]`, `crafter order <recipe> <n>`, `crafter run <recipe> [times]`, `crafter stop <recipe>`, `crafter set <recipe> mode=always|rate|off count= rateCount= rateSeconds= name= folder=`, `crafter quit`.
 - **Apps on the same computer** can ask it the same things: a `crafter_request` event carrying `{ id, op, args }` (ops `status`, `list`, `recipe`, `add`, `scan`, `order`, `run`, `stop`, `set`, `shutdown`) is answered with a `crafter_reply` event `{ id, ok, result or error }`. That is how the Control Panel app reaches it.
 
 Its files are in `/warehouse/data/crafter/`: `config`, `recipes`, `state` (orders in progress and stats, so a reboot carries on where it was) and `log`.
@@ -180,8 +180,8 @@ Each command saves the config and tells the running service, which answers with 
 
 Everything you tap is at the bottom of the monitor, where it is easy to reach; the top row shows the warehouse name, item total and fill (or the last message), and the list fills the space between.
 
-- **The list** shows what is stored, coloured by category: blocks light blue, resources yellow, items white, unstackables magenta. The category row (`All`, `Recent`, `Blocks`, `Items`, `Resources`, `Unstack`) filters it; `Recent` lists what was put in or taken out last, newest first. The search box opens an on-screen keyboard above it; `Qty`/`A-Z` switches the order and `<` `>` turn pages. Items with NBT (enchanted tools, named items) show a `*`.
-- **Tap an item** and the amount panel slides in just above the controls, with the list still visible: preset amounts, stack multiples, a number pad and `Get`, `Stack`, `All`, `Cancel` sharing the width as big buttons. `Get` moves the items into the chest; if the chest fills up, the message says how many made it.
+- **The list** shows what is stored, coloured by category: blocks light blue, resources yellow, items white, unstackables magenta. The category row (`All`, `Recent`, `Blocks`, `Items`, `Resources`, `Unstack`) filters it; `Recent` lists what you put in or took out last, newest first (what the Parcel Service and the crafter move does not count), and is always in that order, so the sort button reads `New` there. The search box opens an on-screen keyboard above it, with keys as wide as the screen allows and two rows high on a 0.5 text scale; `Qty`/`A-Z` switches the order and `<` `>` turn pages. Items with NBT (enchanted tools, named items) show a `*`.
+- **Tap an item** and it stays highlighted while the amount panel slides in just above the controls, with the list still visible. Every preset amount and stack multiple moves that many into the chest the moment it is tapped; `Get stack` (twice as tall as the other buttons) moves a stack, or the number typed on the pad once there is one (it then reads `Get 37`); `All` moves everything; `Cancel` closes. If the chest fills up, the message says how many made it. A tap while the last one is still moving items is refused, so a double tap never moves twice, and taps are never lost while the chest is being read.
 - **The chest panel** appears by itself above the controls whenever the chest holds something (the chest is read a few times a second, so what you put in shows up at once): a row per stack with a `>` to store just that, and a `Store all` button. Anything you got out and changed your mind about goes back the same way. You never leave the list to use it.
 - **Stats** (`Stats` button on narrow monitors; always shown on the right on wide ones): fill bar, slots, items, kinds, fill per storage inventory, top items.
 - **Wide monitors** (57 columns or more, which a 0.5 text scale gives on most monitors) show the list and its controls on the left and the stats on the right, with the chest or amount panel at the bottom right.
@@ -241,14 +241,14 @@ Every method raises an error with a readable message when the service refuses (`
 | `items` | filter, category, sort, limit, offset | `{ items = {...}, total }`; category: `block`, `item`, `resource`, `unstackable` or `recent` (newest first); each item carries its `category` |
 | `item` | item | key, name, displayName, count, maxCount, stacks, locations |
 | `count` | item | number (a plain name counts every NBT variant) |
-| `withdraw` | item, count, to, toSlot | `{ moved, key, message }` |
-| `deposit` | from, slot, slots, item, count | `{ moved, items = { key = n }, message }` |
+| `withdraw` | item, count, to, toSlot, recent | `{ moved, key, message }` |
+| `deposit` | from, slot, slots, item, count, recent | `{ moved, items = { key = n }, message }` |
 | `move` | from, fromSlot, to, toSlot, count | `{ moved }` (raw move; storage involved is re-read) |
 | `stats`, `inventories`, `peripherals`, `details`, `compact`, `rescan`, `rediscover`, `config`, `access`, `help`, `ping` | | |
 
 Rules worth knowing:
 
-- `withdraw` takes from the smallest stacks first, so partial stacks disappear and full ones stay full. It never gives more than is stored, and reports `message` when the target filled up.
+- `withdraw` takes from the smallest stacks first, so partial stacks disappear and full ones stay full. It never gives more than is stored, and reports `message` when the target filled up. Automation passes `recent = false` (the fifth argument of `withdraw`, an option of `deposit`) so that the screens' `Recent` tab keeps showing what people did; the Parcel Service and the crafter do.
 - `deposit` tops up partial stacks (fullest first) before opening new slots. When storage is full the leftovers stay in the source and `message` says so. Its `item` filter takes an id, a short name (`oak_planks`) or a display-style spelling, like parcel task lines.
 - Operations run one at a time in the order they arrive, from every app and screen together, so two apps cannot race for the same stack.
 - Apps on the warehouse computer need no setup. Apps elsewhere: run `wh pair <key>` once on that computer (key from `warehouse key` on the warehouse computer, or `warehouse key disk` plus `wh pair disk` with a floppy). The `/warehouse` folder must be installed there too, since the client library uses its crypto.
@@ -282,6 +282,8 @@ src/lib/transport.lua local events and sealed rednet
 src/lib/secure.lua    sealed messages, keys
 src/lib/access.lua    access point screens
 src/lib/ui.lua        monitor drawing and tap targets
+src/lib/uses.lua      what each inventory and monitor is used for (the pickers)
+src/lib/folders.lua   folders for the task and recipe lists
 src/lib/config.lua    config file and inventory roles
 src/crafter.lua       the crafter: automated crafting from the vault
 src/craft/            its model (recipes), scheduler (engine), turtle line (link), the turtle's side (worker), dashboard (screen) and panel (console)
@@ -291,5 +293,5 @@ src/ccryptolib/       ChaCha20-Poly1305, BLAKE3, random (vendored)
 
 ## Testing
 
-- `node test/check.cjs` compiles every file with Fengari and flags Lua 5.3-only syntax (CC:Tweaked runs Lua 5.2). `node test/run.cjs` runs `test/sim.lua`, the index logic against simulated inventories that behave like CC's (slot-order inserts, stack sizes, drift), and `test/crafter.lua`, the crafter against a simulated vault, turtle and smelter (orders over several steps, always and rate modes, smelting, learning, a turtle that goes away, reboots). `node test/run.cjs crafter` runs just the one. Fengari is taken from the sibling `cc-control-panel/node_modules`.
+- `node test/check.cjs` compiles every file with Fengari and flags Lua 5.3-only syntax (CC:Tweaked runs Lua 5.2). `node test/run.cjs` runs `test/sim.lua`, the index logic against simulated inventories that behave like CC's (slot-order inserts, stack sizes, drift), and `test/crafter.lua`, the crafter against a simulated vault, turtle and smelter (orders over several steps, always and rate modes, smelting, learning, a turtle that goes away, reboots), and `test/screen.lua`, an access point screen against a simulated monitor, chest and service (taps while the chest is being read, the amount panel, the keyboard, the Recent order, what the pickers know). `node test/run.cjs crafter` runs just the one. Fengari is taken from the sibling `cc-control-panel/node_modules`.
 - The crafter answers `debug.screen`, `debug.touch`, `debug.console` and `debug.click` the same way over its `crafter_request` events. In game, the service accepts two test hooks from programs on the warehouse computer only: `debug.screen` (`{ access = name_or_number }`) returns the text of an access point's monitor, and `debug.touch` (`{ access, x, y }`) taps it. With them a script can drive the screens without standing at the monitor; `vault.try("debug.touch", { x = 5, y = 3 })` from the client library does it.

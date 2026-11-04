@@ -429,7 +429,9 @@ end
 
 -- Moves up to `count` of item `key` into inventory `to` (into slot `toSlot`,
 -- or anywhere). Returns the number moved and, when fewer than asked, why.
-function Index:withdraw(key, count, to, toSlot)
+-- opts: recent = false keeps the move out of the recent list (automation
+-- such as the Parcel Service passes it, so Recent shows what people did).
+function Index:withdraw(key, count, to, toSlot, opts)
   local it = self.items[key]
   if not it or it.count <= 0 then return 0, "not in storage", "refused" end
   if self.invs[to] then return 0, "target is a storage inventory", "refused" end
@@ -461,7 +463,7 @@ function Index:withdraw(key, count, to, toSlot)
     if short then self:scanDirty() end
     if not short or got == 0 then break end
   end
-  if moved > 0 then self:touchRecent(key) end
+  if moved > 0 and not (opts and opts.recent == false) then self:touchRecent(key) end
   self:flush()
   if moved < count then
     if err then return moved, err, (moved == 0) and "refused" or nil end
@@ -607,7 +609,9 @@ function Index:deposit(from, opts)
     if short then self:scanDirty() end
     if not short or got == 0 then break end
   end
-  for key in pairs(byKey) do self:touchRecent(key) end
+  if opts.recent ~= false then
+    for key in pairs(byKey) do self:touchRecent(key) end
+  end
   self:flush()
   local message
   if unplaced > 0 then message = "storage full: " .. unplaced .. " left behind" end

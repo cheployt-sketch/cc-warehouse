@@ -22,6 +22,9 @@
 -- The service hosts it by default (config `parcels = true`); `parcels` runs
 -- it on its own, on any paired computer. The file is re-read when it
 -- changes; a "parcel_run" event (with a task id) runs a task at once.
+-- Tasks may sit in folders (`folder`, see lib.folders; `folders` in the
+-- file keeps empty ones), which only the control panel cares about. The
+-- moves tasks make are not counted as "recent" by the screens.
 
 local util = require("lib.util")
 
@@ -173,7 +176,7 @@ function P:runTask(t)
   end
   if t.kind == "deposit" then
     if #t.items == 0 then
-      local n, byKey, msg = v.deposit(t.inventory, { count = budget < math.huge and budget or nil })
+      local n, byKey, msg = v.deposit(t.inventory, { count = budget < math.huge and budget or nil, recent = false })
       for k, c in pairs(byKey) do tally(k, c) end
       note(msg)
     else
@@ -189,7 +192,7 @@ function P:runTask(t)
               allowed = math.min(allowed, spec.limit - vaultCount[it.key])
             end
             if allowed > 0 then
-              local n, _, msg = v.deposit(t.inventory, { slot = it.slot, count = math.min(allowed, it.count) })
+              local n, _, msg = v.deposit(t.inventory, { slot = it.slot, count = math.min(allowed, it.count), recent = false })
               tally(it.key, n)
               if vaultCount[it.key] then vaultCount[it.key] = vaultCount[it.key] + n end
               note(msg)
@@ -215,7 +218,7 @@ function P:runTask(t)
       if spec.total then want = math.min(want, spec.total - (st.items[spec.item] or 0)) end
       want = math.min(want, budget - moved)
       if want > 0 then
-        local ok, n, why = pcall(v.withdraw, spec.item, want, t.inventory)
+        local ok, n, why = pcall(v.withdraw, spec.item, want, t.inventory, nil, { recent = false })
         if ok then
           tally(spec.item, n)
           if why then note(util.shortName(spec.item) .. ": " .. why) end

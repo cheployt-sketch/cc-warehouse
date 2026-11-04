@@ -19,11 +19,12 @@
 -- item (craft.recipes): intermediate steps make only what the vault lacks.
 --
 -- Files: /warehouse/data/crafter/config (the setup), recipes (the
--- recipes), state (orders in progress and stats). A reboot picks up where
+-- recipes and their folders), state (orders in progress and stats). A reboot picks up where
 -- it was: an unfinished turtle round is done again, and whatever the
 -- turtle or its chests still hold is stored when it is reached again.
 
 local util = require("lib.util")
+local Folders = require("lib.folders")
 local Recipes = require("craft.recipes")
 
 local E = {}
@@ -79,7 +80,7 @@ function E.new(opts)
   self.onChange = opts.onChange
   self.clock = opts.clock or os.clock
   self.epoch = opts.epoch or function() return os.epoch("utc") end
-  self.recipes = Recipes.load(self.root)
+  self.recipes, self.folders = Recipes.load(self.root)
   self.state = util.readTable(E.statePath(self.root)) or {}
   self.state.recipes = self.state.recipes or {}
   self.turtle = { state = "unknown", at = -1000 }
@@ -123,7 +124,7 @@ function E:saveState(force)
 end
 
 function E:saveRecipes()
-  Recipes.save(self.root, self.recipes)
+  Recipes.save(self.root, self.recipes, self.folders)
   self:changed()
 end
 
@@ -145,7 +146,7 @@ end
 
 -- Empties an inventory into the vault. Returns moved, items, message.
 function E:deposit(name)
-  local ok, moved, items, msg = pcall(self.vault.deposit, name)
+  local ok, moved, items, msg = pcall(self.vault.deposit, name, { recent = false })
   if not ok then return 0, {}, tostring(moved) end
   if msg == "nothing to store" then msg = nil end
   return moved, items or {}, msg
@@ -193,6 +194,7 @@ function E:update(id, rec)
   rec.id = old.id
   rec.mode = Recipes.validMode(rec.mode) and rec.mode or "off"
   rec.count = tonumber(rec.count) or 1
+  if rec.folder == "" then rec.folder = nil end
   self.recipes[i] = rec
   local st = self:stateOf(rec.id)
   if textutils.serialise(rec.steps) ~= textutils.serialise(old.steps) then
@@ -270,7 +272,8 @@ function E:setMode(id, mode)
   return rec
 end
 
--- Changes settings: mode, count, rateCount, rateSeconds, name.
+-- Changes settings: mode, count, rateCount, rateSeconds, name, folder
+-- (blank: none).
 function E:set(id, fields)
   local rec = self:get(id)
   if fields.mode ~= nil then
@@ -289,12 +292,30 @@ function E:set(id, fields)
       rec[k] = n
     end
   end
+  if fields.folder ~= nil then rec.folder = Folders.resolve(self.folders, self.recipes, fields.folder) end
   local st = self:stateOf(rec.id)
   st.problem = nil
   if rec.mode ~= "rate" then st.rateDue = nil end
   self:saveRecipes()
   self:wake()
   return rec
+end
+
+-- Folders group the recipes on the panels (lib.folders). Returns the
+-- new folder's name.
+function E:addFolder(name)
+  local n, err = Folders.add(self.folders, self.recipes, name)
+  if not n then error(err, 0) end
+  self:saveRecipes()
+  return n
+end
+
+-- Removes a folder; its recipes go back to the top level. Returns how
+-- many did.
+function E:removeFolder(name)
+  local moved = Folders.remove(self.folders, self.recipes, name)
+  self:saveRecipes()
+  return moved
 end
 
 function E:wake()
@@ -541,7 +562,7 @@ end
 function E:supply(item, n, to, slot, learning)
   local moved = 0
   if self:count(item.key) > 0 then
-    local ok, m = pcall(self.vault.withdraw, item.key, n, to, slot)
+    local ok, m = pcall(self.vault.withdraw, item.key, n, to, slot, { recent = false })
     if ok and type(m) == "number" then moved = m end
   end
   if moved < n and learning and self.cfg.recipeChest then
@@ -609,7 +630,7 @@ function E:craftBatch(rec, st, step, learning)
   if actual < n then
     -- Short of something after all: even the stacks out, or give up.
     for _, c in ipairs(cells) do
-      if moved[c.cell] > actual then pcall(self.vault.deposit, cfg.input, { slot = c.cell, count = moved[c.cell] - actual }) end
+      if moved[c.cell] > actual then pcall(self.vault.deposit, cfg.input, { slot = c.cell, count = moved[c.cell] - actual, recent = false }) end
     end
     n = actual
   end
@@ -697,7 +718,7 @@ function E:smeltUnit(rec, st, step)
     if avail < 1 then
       if s.fed == 0 then st.waiting = "waiting for " .. step.input.displayName end
     else
-      local ok, m = pcall(self.vault.withdraw, step.input.key, math.min(need - s.fed, avail), cfg.smeltIn)
+      local ok, m = pcall(self.vault.withdraw, step.input.key, math.min(need - s.fed, avail), cfg.smeltIn, nil, { recent = false })
       if ok and type(m) == "number" and m > 0 then
         s.fed = s.fed + m
         did = true
@@ -852,7 +873,7 @@ function E:summary(rec)
   local st = self:stateOf(rec.id)
   local s = {
     id = rec.id, name = rec.name, mode = rec.mode, count = rec.count, rateCount = rec.rateCount, rateSeconds = rec.rateSeconds,
-    steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
+    folder = rec.folder, steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
     runs = st.stats.runs, made = st.stats.made + (st.run and st.run.made or 0), crafts = st.stats.crafts, smelted = st.stats.smelted,
     errors = st.stats.errors, behind = st.stats.behind, lastRun = st.stats.lastRun, lastMessage = st.stats.lastMessage,
   }

@@ -5,10 +5,17 @@
 -- The list of what is stored fills the space above. When the chest holds
 -- something, a chest panel slides in above the controls with a button per
 -- stack and one for everything; the list stays visible, so you keep
--- picking. Tapping an item opens the amount panel in the same place, with
--- big preset, stack and number-pad buttons. Wide monitors show the list on
--- the left and, on the right, the stats with the chest panel (or amount
--- panel) at the bottom.
+-- picking. Tapping an item opens the amount panel in the same place, and
+-- the item stays highlighted in the list: every amount button moves that
+-- many into the chest at once, Get moves a stack (or the number typed on
+-- the pad). Wide monitors show the list on the left and, on the right,
+-- the stats with the chest panel (or amount panel) at the bottom.
+--
+-- Two coroutines run a screen. One only handles taps and draws; the
+-- other reads the chest and does the work taps hand over (moving items
+-- through the service). A coroutine that waits on a peripheral or on the
+-- service misses every event that arrives meanwhile, so the one that
+-- handles taps never waits on anything.
 --
 -- With a pin in its config the screen locks: after lockAfter seconds
 -- without taps, or only when Lock is tapped if lockAfter is 0.
@@ -21,6 +28,7 @@ local Access = {}
 Access.__index = Access
 
 local POLL = 0.3 -- seconds between reads of the chest
+local TICK = 1 -- seconds between looks at the clock (messages running out, the lock)
 local MSG_TIME = 6 -- seconds a status message stays
 local WIDE = 57
 local CATEGORIES = { "all", "recent", "block", "item", "resource", "unstackable" }
@@ -53,6 +61,8 @@ function Access.new(service, cfg, global)
   self.unlockedUntil = 0
   self.pinEntry = ""
   self.pinFailUntil = 0
+  self.job = nil -- work a tap handed over, waiting for the work coroutine
+  self.busy = false -- while that work runs
   return self
 end
 
@@ -102,7 +112,8 @@ function Access:attach()
   return true
 end
 
--- Re-reads the chest. Returns true when its contents changed.
+-- Re-reads the chest. Returns true when its contents changed. Waits on
+-- the chest, so only the work coroutine calls it.
 function Access:refreshChest()
   local ok, list = pcall(peripheral.call, self.cfg.chest, "list")
   if not ok or type(list) ~= "table" then
@@ -134,6 +145,12 @@ function Access:catColor(cat)
   return self.ui:col(category.COLORS[cat] or "white", colors.white)
 end
 
+-- Keys on the search keyboard are two rows high where the screen is tall
+-- enough (a 0.5 text scale), one otherwise.
+function Access:keyH()
+  return self.ui.h >= 36 and 2 or 1
+end
+
 function Access:draw()
   if not self.ok then return end
   local ui = self.ui
@@ -159,12 +176,17 @@ function Access:draw()
   self.drawnLocked = locked
 end
 
--- Row 1: name, totals and fill, or the current message.
+-- Row 1: name, totals and fill, or the current message, or that the work
+-- of a tap is still going on.
 function Access:drawHeader(x, w)
   local ui = self.ui
   local bg = ui:col("gray", colors.black)
   if self.message and os.clock() < self.messageUntil then
     ui:text(x, 1, util.fit(" " .. self.message, w), self.messageError and ui:col("red") or ui:col("lime"), bg)
+    return
+  end
+  if self.busy then
+    ui:text(x, 1, util.fit(" Working...", w), colors.white, bg)
     return
   end
   local st = self.index.totals
@@ -196,9 +218,12 @@ function Access:drawControls(x, w, y2)
       self.dialog = nil
     end, { bg = self.tab == "stats" and ui:col("blue", colors.black) or nil })
   end
-  local sortLabel = self.sort == "count" and "Qty" or "A-Z"
+  -- The Recent tab is always newest first; the sort button says so there.
+  local recent = self.category == "recent"
+  local sortLabel = recent and "New" or (self.sort == "count" and "Qty" or "A-Z")
   right = right - (#sortLabel + 2) - 1
   ui:button(right, y, sortLabel, function()
+    if self.category == "recent" then return end
     self.sort = self.sort == "count" and "name" or "count"
     self.page = 1
   end)
@@ -246,21 +271,29 @@ function Access:drawControls(x, w, y2)
     self.keyboard = false
   end, { w = 3, bg = ui:col("red", colors.black) })
   if self.keyboard then
-    y = y - 5
-    ui:keyboard(x, y, w, function(ch) self:onKey(ch) end)
+    local keyH = self:keyH()
+    y = y - UI.keyboardHeight(keyH)
+    ui:keyboard(x, y, w, function(ch) self:onKey(ch) end, { keyH = keyH })
   end
   return y
+end
+
+-- The order the list is in: the Recent tab is newest first, the others
+-- follow the sort button.
+function Access:listSort()
+  return self.category == "recent" and "recent" or self.sort
 end
 
 -- The list for the current search, category and order; worked out once
 -- per change of storage, not once per draw.
 function Access:listItems()
+  local sort = self:listSort()
   local c = self.listCache
-  if c and c.version == self.index.version and c.filter == self.search and c.category == self.category and c.sort == self.sort then
+  if c and c.version == self.index.version and c.filter == self.search and c.category == self.category and c.sort == sort then
     return c.items, c.total
   end
-  local items, total = self.index:list({ filter = self.search, category = self.category, sort = self.sort })
-  self.listCache = { version = self.index.version, filter = self.search, category = self.category, sort = self.sort, items = items, total = total }
+  local items, total = self.index:list({ filter = self.search, category = self.category, sort = sort })
+  self.listCache = { version = self.index.version, filter = self.search, category = self.category, sort = sort, items = items, total = total }
   return items, total
 end
 
@@ -269,7 +302,7 @@ end
 function Access:controlsHeight(w)
   local labels = {}
   for i, cat in ipairs(CATEGORIES) do labels[i] = category.LABELS[cat] end
-  return 1 + #UI.wrap(labels, w) + 1 + (self.keyboard and 5 or 0)
+  return 1 + #UI.wrap(labels, w) + 1 + (self.keyboard and UI.keyboardHeight(self:keyH()) or 0)
 end
 
 -- How many rows the chest panel wants, given `free` rows above the controls.
@@ -341,6 +374,8 @@ function Access:drawWide()
   if bottom - 1 >= 3 then self:drawStats(rx, 2, rw, bottom - 1) end
 end
 
+-- The list. The item whose amount panel is open is drawn highlighted, so
+-- it is clear which one was tapped.
 function Access:drawItems(x, y1, w, y2)
   local ui = self.ui
   local rows = y2 - y1 + 1
@@ -357,8 +392,17 @@ function Access:drawItems(x, y1, w, y2)
       local countS = util.fmtCount(it.count, 6)
       local name = it.displayName
       if it.nbt then name = name .. "*" end
-      ui:text(x, yy, util.fit(name, w - #countS - 1), self:catColor(it.category))
-      ui:text(x + w - #countS, yy, countS, ui:col("lightGray", colors.white))
+      local selected = self.dialog ~= nil and self.dialog.key == it.key
+      local fg, countFg, bg = self:catColor(it.category), ui:col("lightGray", colors.white), nil
+      if selected then
+        if ui.color then
+          fg, countFg, bg = colors.white, colors.white, colors.blue
+        else
+          name = ">" .. name
+        end
+      end
+      ui:text(x, yy, util.fit(name, w - #countS), fg, bg)
+      ui:text(x + w - #countS, yy, countS, countFg, bg)
       ui:region(x, yy, x + w - 1, yy, function() self:openDialog(it) end)
     end
   end
@@ -393,15 +437,16 @@ function Access:openDialog(it)
   self.keyboard = false
 end
 
--- The amount panel: title, presets, stack multiples, the amount, a number
--- pad on the left and Get / Stack / All / Cancel on the right. The pad and
+-- The amount panel: title, preset amounts and stack multiples (each moves
+-- that many at once), the typed amount, a number pad on the left and Get
+-- / All / Cancel on the right. Get moves the typed amount, or a stack
+-- when nothing is typed, and is twice as tall as the others. The pad and
 -- the buttons share the width, so every key is a big target.
 function Access:drawDialog(x, y, w, h, keyH)
   local ui = self.ui
   local d = self.dialog
   local avail = self.index:count(d.key)
-  local bg = ui:col("black", colors.black)
-  ui:fill(x, y, w, h, bg)
+  ui:fill(x, y, w, h, colors.black)
   ui:text(x, y, util.fit(" " .. d.displayName, w - 4), self:catColor(d.category), ui:col("gray", colors.black))
   ui:button(x + w - 3, y, "x", function() self.dialog = nil end, { w = 3, bg = ui:col("red", colors.black) })
   ui:text(x, y + 1, util.fit(" In storage: " .. avail .. "  stack " .. d.max, w), ui:col("lightGray", colors.white))
@@ -409,11 +454,9 @@ function Access:drawDialog(x, y, w, h, keyH)
     local n = #values
     local bw = math.floor((w - (n - 1)) / n)
     local bx = x
-    for i, v in ipairs(values) do
-      local label = util.fmtCount(v, bw)
-      ui:button(bx, yy, label, function() d.amount = tostring(v) end, { w = bw })
+    for _, v in ipairs(values) do
+      ui:button(bx, yy, util.fmtCount(v, bw), function() self:withdraw(v) end, { w = bw })
       bx = bx + bw + 1
-      if i == n then break end
     end
   end
   presetRow(y + 2, self.global.presets or { 1, 4, 8, 16, 32 })
@@ -428,7 +471,6 @@ function Access:drawDialog(x, y, w, h, keyH)
   local numW = math.floor(inner * 0.55)
   local keyW = math.max(1, math.floor((numW - 2) / 3))
   numW = keyW * 3 + 2
-  local amount = tonumber(d.amount) or 0
   ui:numpad(x + 1, y + 5, function(k)
     if k == "clear" then
       d.amount = ""
@@ -440,13 +482,31 @@ function Access:drawDialog(x, y, w, h, keyH)
   end, { keyW = keyW, keyH = keyH })
   local bx = x + 1 + numW + 1
   local bw = math.max(4, inner - numW - 1)
-  ui:button(bx, y + 5, "Get", function() self:doWithdraw(amount) end, { w = bw, h = keyH, bg = ui:col("green", colors.black) })
-  ui:button(bx, y + 5 + keyH, "Stack", function() self:doWithdraw(d.max) end, { w = bw, h = keyH })
-  ui:button(bx, y + 5 + keyH * 2, "All", function() self:doWithdraw(avail) end, { w = bw, h = keyH, bg = ui:col("cyan", colors.black) })
+  local typed = tonumber(d.amount)
+  local getLabel = typed and ("Get " .. util.fmtCount(typed, math.max(1, bw - 4))) or "Get stack"
+  ui:button(bx, y + 5, getLabel, function() self:withdraw(typed or d.max) end, { w = bw, h = keyH * 2, bg = ui:col("green", colors.black) })
+  ui:button(bx, y + 5 + keyH * 2, "All", function() self:withdraw(avail) end, { w = bw, h = keyH, bg = ui:col("cyan", colors.black) })
   ui:button(bx, y + 5 + keyH * 3, "Cancel", function() self.dialog = nil end, { w = bw, h = keyH, bg = ui:col("red", colors.black) })
 end
 
-function Access:doWithdraw(n)
+-- Hands the work of a tap (anything that waits on the service or the
+-- chest) to the work coroutine, so taps keep arriving meanwhile. One job
+-- at a time: a tap while one is in flight is refused, which also makes a
+-- double tap harmless. Returns whether the work was taken.
+function Access:work(fn)
+  if self.busy then
+    self:say("Still busy with the last tap", true)
+    return false
+  end
+  self.busy = true
+  self.job = fn
+  os.queueEvent("access_work", self.cfg.monitor)
+  return true
+end
+
+-- Moves n of the item on the panel into the chest; the panel closes once
+-- they are there.
+function Access:withdraw(n)
   local d = self.dialog
   if not d then return end
   n = math.floor(tonumber(n) or 0)
@@ -454,21 +514,23 @@ function Access:doWithdraw(n)
     self:say("Pick an amount first", true)
     return
   end
-  local ok, res = self.service:request("withdraw", { item = d.key, count = n, to = self.cfg.chest })
-  if not ok then
-    self:say("Error: " .. tostring(res), true)
-    return
-  end
-  if res.moved == 0 then
-    self:say("Nothing moved: " .. tostring(res.message or "chest full?"), true)
-  elseif res.moved < n then
-    self:say("Chest full: got " .. res.moved .. " of " .. n, true)
-    self.dialog = nil
-  else
-    self:say("Got " .. res.moved .. " " .. d.displayName)
-    self.dialog = nil
-  end
-  self:refreshChest()
+  self:work(function()
+    local ok, res = self.service:request("withdraw", { item = d.key, count = n, to = self.cfg.chest })
+    if not ok then
+      self:say("Error: " .. tostring(res), true)
+      return
+    end
+    if res.moved == 0 then
+      self:say("Nothing moved: " .. tostring(res.message or "chest full?"), true)
+      return
+    end
+    if res.moved < n then
+      self:say("Chest full: got " .. res.moved .. " of " .. n, true)
+    else
+      self:say("Got " .. res.moved .. " " .. d.displayName)
+    end
+    if self.dialog == d then self.dialog = nil end
+  end)
 end
 
 -- The chest panel: a title with the Store-all button, then a row per stack
@@ -518,15 +580,17 @@ local function reportDeposit(self, res, what)
 end
 
 function Access:storeAll()
-  local ok, res = self.service:request("deposit", { from = self.cfg.chest })
-  if ok then reportDeposit(self, res, "items") else self:say("Error: " .. tostring(res), true) end
-  self:refreshChest()
+  self:work(function()
+    local ok, res = self.service:request("deposit", { from = self.cfg.chest })
+    if ok then reportDeposit(self, res, "items") else self:say("Error: " .. tostring(res), true) end
+  end)
 end
 
 function Access:storeSlot(it)
-  local ok, res = self.service:request("deposit", { from = self.cfg.chest, slot = it.slot })
-  if ok then reportDeposit(self, res, it.displayName) else self:say("Error: " .. tostring(res), true) end
-  self:refreshChest()
+  self:work(function()
+    local ok, res = self.service:request("deposit", { from = self.cfg.chest, slot = it.slot })
+    if ok then reportDeposit(self, res, it.displayName) else self:say("Error: " .. tostring(res), true) end
+  end)
 end
 
 function Access:drawStats(x, y1, w, y2)
@@ -669,16 +733,10 @@ function Access:run()
   end
 end
 
-function Access:armPoll()
-  self.poll = os.startTimer(POLL)
-  self.pollDue = os.clock() + POLL
-end
-
--- Reads the chest and redraws when anything changed: the chest, storage,
--- the lock, or a message that ran out.
+-- Redraws when the clock changed the picture: a message ran out, the
+-- lock state changed, or storage changed without an event reaching us.
 function Access:tick()
-  self:armPoll()
-  local changed = self:refreshChest()
+  local changed = false
   if self.message and os.clock() > self.messageUntil then
     self.message = nil
     changed = true
@@ -690,14 +748,11 @@ function Access:tick()
   if changed or self.index.version ~= self.drawnVersion or self:isLocked() ~= self.drawnLocked then self:draw() end
 end
 
--- While this coroutine waits on the service (a tap that moves items) or
--- on an inventory read, events that arrive are not delivered to it, so a
--- poll timer can be lost. The loop arms a fresh timer after every tap and
--- treats any timer event that comes once a poll is overdue as its own.
-function Access:loop()
-  self:refreshChest()
+-- The tap coroutine: taps, redraws and the clock. It only ever waits for
+-- events, never on a peripheral or the service, so no tap is lost.
+function Access:uiLoop()
   self:draw()
-  self:armPoll()
+  local timer = os.startTimer(TICK)
   while self.ok and not self.stopped do
     local ev = { os.pullEvent() }
     local e = ev[1]
@@ -707,18 +762,50 @@ function Access:loop()
       if not self:isLocked() then self:touch() end
       self.ui:tap(ev[3], ev[4])
       self:draw()
-      self:armPoll()
     elseif e == "monitor_resize" and ev[2] == self.cfg.monitor then
       self.ui:resize()
       self:draw()
-    elseif e == "timer" and (ev[2] == self.poll or os.clock() >= self.pollDue) then
-      self:tick()
+    elseif e == "access_redraw" and ev[2] == self.cfg.monitor then
+      self:draw()
     elseif e == "warehouse_event" then
       if not self:isLocked() and self.index.version ~= self.drawnVersion then self:draw() end
+    elseif e == "timer" and ev[2] == timer then
+      timer = os.startTimer(TICK)
+      self:tick()
     elseif (e == "peripheral_detach" or e == "peripheral") and ev[2] == self.cfg.monitor then
       self.ok = false
     end
   end
+end
+
+-- The work coroutine: reads the chest every POLL seconds and runs the
+-- work taps hand over, one job at a time, then has the tap coroutine
+-- redraw. Waiting here costs nothing: the taps go to the other one.
+function Access:workLoop()
+  while self.ok and not self.stopped do
+    local job = self.job
+    self.job = nil
+    if job then
+      local ok, err = pcall(job)
+      if not ok then self:say("Error: " .. tostring(err), true) end
+    end
+    local changed = self:refreshChest()
+    if job then self.busy = false end
+    if job or changed then os.queueEvent("access_redraw", self.cfg.monitor) end
+    if not self.job then
+      local timer = os.startTimer(POLL)
+      while true do
+        local ev, a = os.pullEvent()
+        if (ev == "timer" and a == timer) or (ev == "access_work" and a == self.cfg.monitor) then break end
+        if not self.ok or self.stopped then break end
+      end
+    end
+  end
+end
+
+function Access:loop()
+  self:refreshChest()
+  parallel.waitForAny(function() self:uiLoop() end, function() self:workLoop() end)
 end
 
 return Access

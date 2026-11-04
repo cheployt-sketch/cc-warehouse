@@ -28,6 +28,7 @@ lib/b64.lua
 lib/category.lua
 lib/config.lua
 lib/crypto.lua
+lib/folders.lua
 lib/index.lua
 lib/log.lua
 lib/runner.lua
@@ -35,6 +36,7 @@ lib/secure.lua
 lib/service.lua
 lib/transport.lua
 lib/ui.lua
+lib/uses.lua
 lib/util.lua
 lib/version.lua
 parcel.lua
