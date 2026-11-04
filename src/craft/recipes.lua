@@ -10,7 +10,8 @@
 --   { id = "r1", name = "Pickaxe", mode = "off",       -- off, always, rate, keep
 --     count = 1,                                       -- "Run" = this many runs
 --     rateCount = 64, rateSeconds = 600,               -- for mode "rate"
---     keepCount = 64,                                  -- for mode "keep": craft until the vault holds this many
+--     keepCount = 64, keepDelay = 0,                   -- for mode "keep": craft until the vault holds this many,
+--                                                      -- starting keepDelay seconds after the count dropped below
 --     steps = {
 --       { kind = "craft", grid = { [1] = { key, name, displayName, slot } ... [9] },
 --         result = { key, name, displayName, count, maxCount } },  -- nil until learned

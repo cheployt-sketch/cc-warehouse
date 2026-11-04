@@ -952,6 +952,32 @@ test("keep: makes planks until the vault holds the count, rests, and goes again 
   eq(w.vault.count("minecraft:oak_planks"), 0, "off means off")
 end)
 
+test("keep with a delay: the count has to stay below for that long before anything is made", function()
+  local w = world({ stock = { ["minecraft:oak_log"] = 100, ["minecraft:oak_planks"] = 16 } })
+  local rec = w.eng:add({ name = "Planks", steps = { PLANKS() }, mode = "keep", keepCount = 16, keepDelay = 100 })
+  ticks(w, 3)
+  eq(w.vault.count("minecraft:oak_planks"), 16, "enough: nothing made")
+  w.vault.sim.stock["minecraft:oak_planks"] = 6
+  ticks(w, 10)
+  eq(w.vault.count("minecraft:oak_planks"), 6, "nothing made yet while the delay runs")
+  local s = summary(w, rec.id)
+  check(s.text:find("keeping 16: 6 stored, topping up in %d+ s"), "counts down", s.text)
+  -- the count recovers in time: the delay starts over next time
+  w.vault.sim.stock["minecraft:oak_planks"] = 20
+  ticks(w, 95)
+  eq(w.vault.count("minecraft:oak_planks"), 20, "still nothing made")
+  check(not summary(w, rec.id).text:find("topping up"), "no countdown while there are enough", summary(w, rec.id).text)
+  w.vault.sim.stock["minecraft:oak_planks"] = 6
+  ticks(w, 60)
+  eq(w.vault.count("minecraft:oak_planks"), 6, "a fresh delay: nothing after 60 s")
+  check(until_(w, function() return w.vault.count("minecraft:oak_planks") >= 16 end, 60), "topped up once the delay has passed")
+  local ok, err = pcall(w.eng.set, w.eng, rec.id, { keepDelay = -5 })
+  check(not ok and err:find("keepDelay"), "a negative delay is refused", tostring(err))
+  w.eng:set(rec.id, { keepDelay = 0 })
+  w.vault.sim.stock["minecraft:oak_planks"] = 2
+  check(until_(w, function() return w.vault.count("minecraft:oak_planks") >= 16 end, 10), "no delay: at once")
+end)
+
 test("a factory step: inputs go to their entry inventories, results are collected from the collection ones", function()
   local w, step, machine = factoryWorld()
   local rec = w.eng:add({ name = "Blocks", steps = { step } })

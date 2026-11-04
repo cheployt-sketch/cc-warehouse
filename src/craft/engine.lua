@@ -18,9 +18,10 @@
 --
 -- Each recipe runs on its own terms: mode "always" keeps making one round
 -- after another, "rate" orders rateCount items every rateSeconds, "keep"
--- tops the vault up to keepCount of the result and rests until it drops
--- below that again, and an order or a "run N times" from the UI, the
--- panel or the command line queues work in any mode. Orders are planned backwards from the final
+-- tops the vault up to keepCount of the result (keepDelay seconds after
+-- the count dropped below, so that a dip may pass) and rests until it
+-- drops below that again, and an order or a "run N times" from the UI,
+-- the panel or the command line queues work in any mode. Orders are planned backwards from the final
 -- item (craft.recipes): intermediate steps make only what the vault lacks.
 --
 -- Files: /warehouse/data/crafter/config (the setup), recipes (the
@@ -297,6 +298,11 @@ function E:set(id, fields)
       rec[k] = n
     end
   end
+  if fields.keepDelay ~= nil then
+    local n = tonumber(fields.keepDelay)
+    if not n or n < 0 then error("keepDelay must be a number of seconds (0: at once)", 0) end
+    rec.keepDelay = math.floor(n)
+  end
   if fields.folder ~= nil then rec.folder = Folders.resolve(self.folders, self.recipes, fields.folder) end
   local st = self:stateOf(rec.id)
   st.problem = nil
@@ -450,18 +456,36 @@ function E:wanted(rec, st)
     w = Recipes.maxBatch(step, function(k) return self:details(k) end) * last.count
     if w == math.huge then w = 64 end
   elseif rec.mode == "keep" and w == 0 then
-    -- Mode "keep": make what the vault lacks of the result, then rest.
+    -- Mode "keep": make what the vault lacks of the result, then rest. A
+    -- delay lets a dip pass before anything is made: the count has to stay
+    -- below for keepDelay seconds.
     local keep = E.keepCount(rec)
     local have = self:count(last.key)
     st.keepHave = have
-    if have < keep then w = keep - have end
+    if have < keep then
+      local delay = E.keepDelay(rec)
+      if delay > 0 then
+        local now = self.epoch()
+        if not st.keepLowSince then st.keepLowSince = now end
+        if now - st.keepLowSince < delay * 1000 then return 0 end
+      end
+      st.keepLowSince = nil
+      w = keep - have
+    else
+      st.keepLowSince = nil
+    end
   end
   return w
 end
 
--- How many of the result a recipe in mode "keep" keeps in the vault.
+-- How many of the result a recipe in mode "keep" keeps in the vault, and
+-- how many seconds it waits below that before topping up.
 function E.keepCount(rec)
   return math.max(1, math.floor(tonumber(rec.keepCount) or 64))
+end
+
+function E.keepDelay(rec)
+  return math.max(0, math.floor(tonumber(rec.keepDelay) or 0))
 end
 
 function E:fail(rec, st, msg)
@@ -1024,7 +1048,7 @@ function E:summary(rec)
   local st = self:stateOf(rec.id)
   local s = {
     id = rec.id, name = rec.name, mode = rec.mode, count = rec.count, rateCount = rec.rateCount, rateSeconds = rec.rateSeconds,
-    keepCount = rec.keepCount, folder = rec.folder, steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
+    keepCount = rec.keepCount, keepDelay = rec.keepDelay, folder = rec.folder, steps = #rec.steps, pending = st.pending.items + st.pending.runs * ((Recipes.lastResult(rec) or {}).count or 1),
     runs = st.stats.runs, made = st.stats.made + (st.run and st.run.made or 0), crafts = st.stats.crafts, smelted = st.stats.smelted, factory = st.stats.factory or 0,
     errors = st.stats.errors, behind = st.stats.behind, lastRun = st.stats.lastRun, lastMessage = st.stats.lastMessage,
   }
@@ -1070,7 +1094,13 @@ function E:summary(rec)
     local due = st.rateDue and math.max(0, math.floor((st.rateDue - self.epoch()) / 1000)) or 0
     s.state, s.text = "idle", string.format("%d every %ds, next in %ds", rec.rateCount or 1, rec.rateSeconds or 600, due)
   elseif rec.mode == "keep" then
-    s.state, s.text = "idle", string.format("keeping %d: %d stored", E.keepCount(rec), st.keepHave or 0)
+    local keep, have = E.keepCount(rec), st.keepHave or 0
+    local text = string.format("keeping %d: %d stored", keep, have)
+    if have < keep and st.keepLowSince then
+      local left = math.max(0, math.ceil((E.keepDelay(rec) * 1000 - (self.epoch() - st.keepLowSince)) / 1000))
+      text = text .. ", topping up in " .. left .. " s"
+    end
+    s.state, s.text = "idle", text
   else
     s.state, s.text = "idle", "idle"
   end

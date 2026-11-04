@@ -225,6 +225,7 @@ function Console:openRecipeForm(id)
     rateCount = UI.newField(r.rateCount or 64, { max = 6, filter = "%d" }),
     rateSeconds = UI.newField(r.rateSeconds or 600, { max = 6, filter = "%d" }),
     keep = UI.newField(r.keepCount or 64, { max = 6, filter = "%d" }),
+    keepDelay = UI.newField(r.keepDelay or 0, { max = 6, filter = "%d" }),
     order = UI.newField("", { max = 6, filter = "%d" }),
     mode = r.mode or "off",
   }
@@ -240,6 +241,7 @@ function Console:formRecipe()
   r.rateCount = tonumber(f.rateCount.text) or 64
   r.rateSeconds = tonumber(f.rateSeconds.text) or 600
   r.keepCount = tonumber(f.keep.text) or 64
+  r.keepDelay = tonumber(f.keepDelay.text) or 0
   return r
 end
 
@@ -399,7 +401,9 @@ function Console:drawForm(y1, y2)
   y = y + 1
   ui:text(2, y, "Keep")
   ui:field(7, y, 7, f.keep)
-  ui:text(15, y, "in the vault (mode keep)", ui:col("lightGray", colors.white))
+  ui:text(15, y, "delay")
+  ui:field(21, y, 5, f.keepDelay)
+  ui:text(27, y, "s (mode keep)", ui:col("lightGray", colors.white))
   -- The folder the recipe is filed in; the picker changes it.
   ui:button(41, y, r.folder and ("in " .. r.folder) or "no folder", function()
     self:openPicker("folder", function(v) r.folder = v ~= "" and v or nil end)
