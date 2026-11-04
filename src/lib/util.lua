@@ -91,6 +91,17 @@ function U.contains(hay, needle)
 end
 
 -- Reads a table written by writeTable. Returns nil when missing or broken.
+-- The build of the warehouse folder at root, written to data/build by the
+-- one-file installer (warehouse.lua); nil when the folder was installed
+-- another way.
+function U.readBuild(root)
+  local h = fs.open(fs.combine(root or "/warehouse", "data/build"), "r")
+  if not h then return nil end
+  local b = (h.readAll() or ""):gsub("%s+$", "")
+  h.close()
+  return b ~= "" and b or nil
+end
+
 function U.readTable(path)
   if not fs.exists(path) then return nil end
   local h = fs.open(path, "r")

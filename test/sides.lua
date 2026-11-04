@@ -38,6 +38,9 @@ local cases = {
     { input = "minecraft:chest_26", output = "minecraft:chest_27", grid = { { name = "minecraft:oak_log" } } }, "bottom", "top" },
   { "one chest only: both sides are it",
     { bottom = chest(27, LOG) }, { grid = { { name = "minecraft:oak_log" } } }, "bottom", "bottom" },
+  { "no names, a stray empty chest on the configured side: the chest with the item still wins",
+    { front = chest(27), top = chest(54, LOG), bottom = chest(54) },
+    { grid = { { name = "minecraft:oak_log" } } }, "top", "bottom" },
   { "configured sides with chests and nothing to match: kept",
     { front = chest(27), top = chest(27) }, {}, "front", "front" },
 }

@@ -340,15 +340,6 @@ end
 
 -- Is the turtle there and able to craft? Asked again every RETRY seconds
 -- while it is not. On first contact it drops whatever it still holds.
--- This computer's warehouse build (data/build, written by warehouse.lua).
-function E:build()
-  local h = fs.open(fs.combine(self.root, "data/build"), "r")
-  if not h then return nil end
-  local b = (h.readAll() or ""):gsub("%s+$", "")
-  h.close()
-  return b ~= "" and b or nil
-end
-
 function E:turtleReady()
   if self.turtle.state == "ready" then return true end
   if not self.link then
@@ -367,7 +358,7 @@ function E:turtleReady()
   self.log("turtle #" .. tostring(self.link.id) .. " ready" .. (r.label and (" (" .. r.label .. ")") or ""))
   -- A turtle running other crafter code than this computer is the usual
   -- reason for odd failures: say so where the state is shown.
-  local own = self:build()
+  local own = util.readBuild(self.root)
   if own and r.build and r.build ~= own then
     self.turtle.msg = "runs another crafter build (" .. r.build:sub(1, 6) .. " here " .. own:sub(1, 6) .. "): update the turtle"
     self.log("turtle #" .. tostring(self.link.id) .. " " .. self.turtle.msg)
@@ -770,7 +761,7 @@ function E:checkTurtle()
   elseif now - self.turtle.at >= E.HEARTBEAT then
     self.turtle.at = now
     self.link:setTurtle(self.cfg.turtle)
-    local r, err = self.link:ping()
+    local r, err = self.link:ping(self.cfg.input, self.cfg.output or self.cfg.input)
     if not r then self:turtleLost(err) end
   end
 end

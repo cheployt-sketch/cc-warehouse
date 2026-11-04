@@ -87,35 +87,53 @@ local function sidesFor(cfg, req)
   else
     outSide = sideOf(req.output, cfg.output)
   end
-  if not found and not hasChest(inSide) then
+  if not found then
     -- No names (an older service), or chests it cannot see on the network
-    -- (a wireless modem), and nothing on the configured side: use the
-    -- chests that are there. The one holding the first item asked for is
-    -- the input; another one, if any, the output.
+    -- (a wireless modem): use the chests that are there. The one holding
+    -- the first item asked for is the input, whatever side was configured
+    -- (a stray chest on that side must not win); another one, if any, the
+    -- output. Without an item to look for, the configured side, if it has
+    -- a chest, else the first chest found.
     local have = {}
     for _, side in ipairs({ "front", "top", "bottom" }) do
       if hasChest(side) then have[#have + 1] = side end
     end
     if #have > 0 then
       local first = req.grid and req.grid[1] and req.grid[1].name
-      inSide = nil
+      local holding
       for _, side in ipairs(have) do
         local ok, list = pcall(peripheral.call, side, "list")
         if ok and type(list) == "table" then
           for _, it in pairs(list) do
-            if it.name == first then inSide = side break end
+            if it.name == first then holding = side break end
           end
         end
-        if inSide then break end
+        if holding then break end
       end
-      inSide = inSide or (hasChest(cfg.input) and cfg.input) or have[1]
-      if hasChest(cfg.output) and cfg.output ~= inSide then
-        outSide = cfg.output
-      else
-        outSide = inSide
+      -- Another chest than the input, skipping `avoid` (a configured side
+      -- that proved wrong) when there is a choice.
+      local function another(input, avoid)
         for _, side in ipairs(have) do
-          if side ~= inSide then outSide = side end
+          if side ~= input and side ~= avoid then return side end
         end
+        for _, side in ipairs(have) do
+          if side ~= input then return side end
+        end
+        return input
+      end
+      if holding then
+        inSide = holding
+        if holding == cfg.input and hasChest(cfg.output) then
+          outSide = cfg.output
+        else
+          outSide = another(inSide, cfg.input)
+        end
+      elseif hasChest(cfg.input) then
+        inSide = cfg.input
+        outSide = hasChest(cfg.output) and cfg.output or inSide
+      else
+        inSide = have[1]
+        outSide = another(inSide, nil)
       end
     end
   end
@@ -231,16 +249,6 @@ local function craft(cfg, req)
   return reply
 end
 
--- The build of the warehouse folder here (written by warehouse.lua), so
--- the service can tell when this turtle runs other code than it does.
-local function build(root)
-  local h = fs.open(fs.combine(root or "/warehouse", "data/build"), "r")
-  if not h then return nil end
-  local b = (h.readAll() or ""):gsub("%s+$", "")
-  h.close()
-  return b ~= "" and b or nil
-end
-
 local function handle(cfg, req)
   if req.op == "ping" then
     local free = 0
@@ -249,7 +257,7 @@ local function handle(cfg, req)
     end
     local sides = sidesFor(cfg, req)
     local chest, missing = chests(sides)
-    return { ok = true, crafty = crafter() ~= nil, chest = chest, missing = missing, fuel = turtle.getFuelLevel(), free = free, label = os.getComputerLabel(), input = sides.input, output = sides.output, build = build(cfg.root) }
+    return { ok = true, crafty = crafter() ~= nil, chest = chest, missing = missing, fuel = turtle.getFuelLevel(), free = free, label = os.getComputerLabel(), input = sides.input, output = sides.output, build = util.readBuild(cfg.root) }
   elseif req.op == "clear" then
     local dropped, left = dropAll(sidesFor(cfg, req).output)
     return { ok = true, dropped = dropped, left = #left > 0 and left or nil }
