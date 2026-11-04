@@ -199,6 +199,16 @@ local function craft(cfg, req)
   return reply
 end
 
+-- The build of the warehouse folder here (written by warehouse.lua), so
+-- the service can tell when this turtle runs other code than it does.
+local function build(root)
+  local h = fs.open(fs.combine(root or "/warehouse", "data/build"), "r")
+  if not h then return nil end
+  local b = (h.readAll() or ""):gsub("%s+$", "")
+  h.close()
+  return b ~= "" and b or nil
+end
+
 local function handle(cfg, req)
   if req.op == "ping" then
     local free = 0
@@ -207,7 +217,7 @@ local function handle(cfg, req)
     end
     local sides = sidesFor(cfg, req)
     local chest, missing = chests(sides)
-    return { ok = true, crafty = crafter() ~= nil, chest = chest, missing = missing, fuel = turtle.getFuelLevel(), free = free, label = os.getComputerLabel(), input = sides.input, output = sides.output }
+    return { ok = true, crafty = crafter() ~= nil, chest = chest, missing = missing, fuel = turtle.getFuelLevel(), free = free, label = os.getComputerLabel(), input = sides.input, output = sides.output, build = build(cfg.root) }
   elseif req.op == "clear" then
     local dropped, left = dropAll(sidesFor(cfg, req).output)
     return { ok = true, dropped = dropped, left = #left > 0 and left or nil }
@@ -237,7 +247,7 @@ function W.run(opts)
   if openModems() == 0 then error("no modem on this turtle", 0) end
   pcall(rednet.host, W.PROTOCOL, "crafter" .. os.getComputerID())
   if not crafter() then say("No crafting table on this turtle: it answers, but cannot craft.") end
-  cfg.say = say
+  cfg.say, cfg.root = say, opts.root
   local chest, missing = chests(cfg)
   if not chest then say("No chest on the " .. missing .. " side yet: the service's chests are found by their contents when it asks.") end
   say("Crafting from the " .. cfg.input .. " chest into the " .. cfg.output .. " chest (Ctrl+T stops)")

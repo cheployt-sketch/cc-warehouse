@@ -340,6 +340,15 @@ end
 
 -- Is the turtle there and able to craft? Asked again every RETRY seconds
 -- while it is not. On first contact it drops whatever it still holds.
+-- This computer's warehouse build (data/build, written by warehouse.lua).
+function E:build()
+  local h = fs.open(fs.combine(self.root, "data/build"), "r")
+  if not h then return nil end
+  local b = (h.readAll() or ""):gsub("%s+$", "")
+  h.close()
+  return b ~= "" and b or nil
+end
+
 function E:turtleReady()
   if self.turtle.state == "ready" then return true end
   if not self.link then
@@ -356,6 +365,15 @@ function E:turtleReady()
   end
   self.turtle = { state = "ready", at = self.clock(), id = self.link.id, label = r.label, fuel = r.fuel, input = r.input, output = r.output }
   self.log("turtle #" .. tostring(self.link.id) .. " ready" .. (r.label and (" (" .. r.label .. ")") or ""))
+  -- A turtle running other crafter code than this computer is the usual
+  -- reason for odd failures: say so where the state is shown.
+  local own = self:build()
+  if own and r.build and r.build ~= own then
+    self.turtle.msg = "runs another crafter build (" .. r.build:sub(1, 6) .. " here " .. own:sub(1, 6) .. "): update the turtle"
+    self.log("turtle #" .. tostring(self.link.id) .. " " .. self.turtle.msg)
+  elseif own and not r.build then
+    self.turtle.msg = "its crafter build is unknown: update the turtle"
+  end
   if (r.free or 16) < 16 then
     self.link:clear(self.cfg.input, self.cfg.output or self.cfg.input)
     if self.cfg.output then self:deposit(self.cfg.output) end
