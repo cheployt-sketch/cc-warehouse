@@ -349,7 +349,7 @@ function E:turtleReady()
   if self.clock() - self.turtle.at < E.RETRY then return false end
   self.turtle.at = self.clock()
   self.link:setTurtle(self.cfg.turtle)
-  local r, err = self.link:ping()
+  local r, err = self.link:ping(self.cfg.input, self.cfg.output or self.cfg.input)
   if not r then
     self:turtleLost(err)
     return false
@@ -357,7 +357,7 @@ function E:turtleReady()
   self.turtle = { state = "ready", at = self.clock(), id = self.link.id, label = r.label, fuel = r.fuel, input = r.input, output = r.output }
   self.log("turtle #" .. tostring(self.link.id) .. " ready" .. (r.label and (" (" .. r.label .. ")") or ""))
   if (r.free or 16) < 16 then
-    self.link:clear()
+    self.link:clear(self.cfg.input, self.cfg.output or self.cfg.input)
     if self.cfg.output then self:deposit(self.cfg.output) end
   end
   self:changed()
@@ -601,7 +601,7 @@ function E:craftBatch(rec, st, step, learning)
   st.waiting = learning and ("learning step " .. (st.learn and st.learn.step or "?")) or nil
   local grid = {}
   for _, c in ipairs(cells) do grid[#grid + 1] = { slot = Recipes.turtleSlot(c.cell), name = c.item.name, count = n } end
-  local reply, err = self.link:craft(grid, n)
+  local reply, err = self.link:craft(grid, n, nil, cfg.input, output)
   if not reply then
     self:turtleLost(err)
     self:deposit(cfg.input)

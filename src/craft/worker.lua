@@ -9,7 +9,8 @@
 -- `warehouse key disk`) and a modem: a wired one on the warehouse's
 -- network is best, since the service can then switch it on too.
 --
--- File: /warehouse/data/crafter.worker (the input and output sides).
+-- File: /warehouse/data/crafter.worker (the input and output sides, used
+-- only when the service's chests cannot be told apart by their contents).
 
 local secure = require("lib.secure")
 local util = require("lib.util")
@@ -31,10 +32,66 @@ local function hasChest(side)
 end
 
 -- The input and output chests are both there, or which side lacks one.
-local function chests(cfg)
-  if not hasChest(cfg.input) then return false, cfg.input end
-  if cfg.output ~= cfg.input and not hasChest(cfg.output) then return false, cfg.output end
+local function chests(sides)
+  if not hasChest(sides.input) then return false, sides.input end
+  if sides.output ~= sides.input and not hasChest(sides.output) then return false, sides.output end
   return true
+end
+
+-- What an inventory holds, in a form two views of the same chest share:
+-- the chest as the service names it on the network, and as a side of
+-- this turtle.
+local function signature(name)
+  local ok, list = pcall(peripheral.call, name, "list")
+  if not ok or type(list) ~= "table" then return nil end
+  local ok2, size = pcall(peripheral.call, name, "size")
+  local slots = {}
+  for slot in pairs(list) do slots[#slots + 1] = slot end
+  table.sort(slots)
+  local parts = { tostring(ok2 and size or "?") }
+  for _, slot in ipairs(slots) do
+    local it = list[slot]
+    parts[#parts + 1] = slot .. "=" .. tostring(it.name) .. "x" .. tostring(it.count)
+  end
+  return table.concat(parts, ";")
+end
+
+-- The side of this turtle where the service's chest `name` is: the side
+-- showing the same contents and size. Several alike (empty chests of one
+-- size): the configured side when it is one of them, else the first.
+-- Nothing alike, or no name: the configured side. Returns the side and
+-- whether it was found that way.
+local function sideOf(name, fallback)
+  if type(name) ~= "string" or not peripheral.isPresent(name) then return fallback, false end
+  local want = signature(name)
+  if not want then return fallback, false end
+  local matches = {}
+  for _, side in ipairs({ "front", "top", "bottom" }) do
+    if hasChest(side) and signature(side) == want then matches[#matches + 1] = side end
+  end
+  if #matches == 0 then return fallback, false end
+  for _, side in ipairs(matches) do
+    if side == fallback then return side, true end
+  end
+  return matches[1], true
+end
+
+-- The sides to use for a request from the service, which names its input
+-- and output chests. The service fills the input chest before asking for a
+-- craft, so that one is unmistakable then.
+local function sidesFor(cfg, req)
+  local inSide, found = sideOf(req.input, cfg.input)
+  local outSide
+  if req.output == nil or req.output == req.input then
+    outSide = found and inSide or cfg.output
+  else
+    outSide = sideOf(req.output, cfg.output)
+  end
+  if cfg.say and (inSide ~= cfg.shownIn or outSide ~= cfg.shownOut) then
+    cfg.shownIn, cfg.shownOut = inSide, outSide
+    cfg.say("Taking from the " .. inSide .. " chest, dropping into the " .. outSide .. " one" .. (found and " (found by their contents)" or ""))
+  end
+  return { input = inSide, output = outSide }
 end
 
 local function openModems()
@@ -108,14 +165,15 @@ end
 local function craft(cfg, req)
   local doCraft = crafter()
   if not doCraft then return { ok = false, error = "no crafting table on this turtle" } end
-  local ok, side = chests(cfg)
+  local sides = sidesFor(cfg, req)
+  local ok, side = chests(sides)
   if not ok then return { ok = false, error = "no chest on the " .. side .. " side of the turtle" } end
-  if holding() > 0 then dropAll(cfg.output) end
+  if holding() > 0 then dropAll(sides.output) end
   for _, g in ipairs(req.grid or {}) do
-    local got = take(cfg.input, g.slot, g.count)
+    local got = take(sides.input, g.slot, g.count)
     local it = turtle.getItemDetail(g.slot)
     if got ~= g.count or not it or it.name ~= g.name then
-      local dropped = dropAll(cfg.output)
+      local dropped = dropAll(sides.output)
       return { ok = false, dropped = dropped,
         error = string.format("slot %d: expected %d %s, got %d %s", g.slot, g.count, util.shortName(g.name), got, it and util.shortName(it.name) or "nothing") }
     end
@@ -123,7 +181,7 @@ local function craft(cfg, req)
   turtle.select(Recipes.OUTPUT_SLOT)
   local ok, why = doCraft(req.limit or 64)
   if not ok then
-    local dropped = dropAll(cfg.output)
+    local dropped = dropAll(sides.output)
     return { ok = false, error = tostring(why or "no matching recipe"), dropped = dropped }
   end
   local out = turtle.getItemDetail(Recipes.OUTPUT_SLOT, true)
@@ -134,7 +192,7 @@ local function craft(cfg, req)
       if it and it.name == out.name and it.nbt == out.nbt then made = made + it.count end
     end
   end
-  local dropped, left = dropAll(cfg.output)
+  local dropped, left = dropAll(sides.output)
   local reply = { ok = true, made = made, dropped = dropped }
   if out then reply.result = { name = out.name, nbt = out.nbt, displayName = out.displayName, maxCount = out.maxCount } end
   if #left > 0 then reply.left = left end
@@ -147,10 +205,11 @@ local function handle(cfg, req)
     for slot = 1, 16 do
       if turtle.getItemCount(slot) == 0 then free = free + 1 end
     end
-    local chest, missing = chests(cfg)
-    return { ok = true, crafty = crafter() ~= nil, chest = chest, missing = missing, fuel = turtle.getFuelLevel(), free = free, label = os.getComputerLabel(), input = cfg.input, output = cfg.output }
+    local sides = sidesFor(cfg, req)
+    local chest, missing = chests(sides)
+    return { ok = true, crafty = crafter() ~= nil, chest = chest, missing = missing, fuel = turtle.getFuelLevel(), free = free, label = os.getComputerLabel(), input = sides.input, output = sides.output }
   elseif req.op == "clear" then
-    local dropped, left = dropAll(cfg.output)
+    local dropped, left = dropAll(sidesFor(cfg, req).output)
     return { ok = true, dropped = dropped, left = #left > 0 and left or nil }
   elseif req.op == "craft" then
     return craft(cfg, req)
@@ -178,8 +237,9 @@ function W.run(opts)
   if openModems() == 0 then error("no modem on this turtle", 0) end
   pcall(rednet.host, W.PROTOCOL, "crafter" .. os.getComputerID())
   if not crafter() then say("No crafting table on this turtle: it answers, but cannot craft.") end
+  cfg.say = say
   local chest, missing = chests(cfg)
-  if not chest then say("No chest on the " .. missing .. " side: it answers, but cannot craft until there is one.") end
+  if not chest then say("No chest on the " .. missing .. " side yet: the service's chests are found by their contents when it asks.") end
   say("Crafting from the " .. cfg.input .. " chest into the " .. cfg.output .. " chest (Ctrl+T stops)")
   local seen = {}
   local n = 0

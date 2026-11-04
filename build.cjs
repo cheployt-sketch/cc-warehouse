@@ -91,8 +91,8 @@ if what == "crafter" and turtle then
   print("This turtle is the crafter's worker. Next:")
   print("  wh pair disk            with the floppy from 'warehouse key disk'")
   print("                          (or wh pair <key>, key from 'warehouse key')")
-  print("  crafter worker top bottom   take from the chest above, drop below;")
-  print("                          front, top or bottom, one side means both")
+  print("  crafter worker          it finds the service's chests among the ones")
+  print("                          in front of, above and below it")
   print("  crafter startup         start the worker on every boot")
   print("A crafting table goes on the turtle, the chests it uses on the wired network.")
 elseif what == "crafter" then

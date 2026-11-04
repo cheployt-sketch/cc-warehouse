@@ -128,8 +128,10 @@ end
 
 -- Is the turtle there, and can it craft? Returns its answer
 -- { crafty, fuel, free, label }, or nil and why.
-function L:ping()
-  local r, err = self:request({ op = "ping" }, 5)
+-- input and output: the service's chest names, so the turtle can tell
+-- which of its sides they are on.
+function L:ping(input, output)
+  local r, err = self:request({ op = "ping", input = input, output = output }, 5)
   if not r then return nil, err end
   if not r.crafty then return nil, "turtle #" .. tostring(self.id) .. " has no crafting table" end
   if r.chest == false then return nil, "turtle #" .. tostring(self.id) .. " has no chest on its " .. tostring(r.missing) .. " side" end
@@ -140,13 +142,13 @@ end
 -- count = items in the slot }, ... } in the order the items lie in the
 -- input chest. Returns the reply ({ ok, made, result = { name, nbt,
 -- displayName, maxCount }, error, dropped }), or nil and why.
-function L:craft(grid, limit, timeout)
-  return self:request({ op = "craft", grid = grid, limit = limit }, timeout or L.TIMEOUT)
+function L:craft(grid, limit, timeout, input, output)
+  return self:request({ op = "craft", grid = grid, limit = limit, input = input, output = output }, timeout or L.TIMEOUT)
 end
 
 -- Makes the turtle drop everything it holds into its output chest.
-function L:clear()
-  return self:request({ op = "clear" }, 10)
+function L:clear(input, output)
+  return self:request({ op = "clear", input = input, output = output }, 10)
 end
 
 return L
