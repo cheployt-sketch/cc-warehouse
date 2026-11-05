@@ -1,6 +1,7 @@
-// publish: builds dist/warehouse.lua and puts it in a secret GitHub gist, so
-// that one wget line installs the warehouse without the repository being
-// public. Needs the GitHub CLI (`gh auth login` with the gist scope).
+// publish: builds dist/warehouse.lua (minified) and puts it in a secret
+// GitHub gist, so that one wget line installs the warehouse without the
+// repository being public, from any world with HTTP on, a multiplayer server
+// included. Needs the GitHub CLI (`gh auth login` with the gist scope).
 //   node publish.cjs
 // The gist's id is kept in gists.json; the first run creates the gist and
 // writes the file, later runs update the same gist, so the URL never changes.
@@ -34,21 +35,20 @@ if (!ids.warehouse) {
 }
 const url = `https://gist.githubusercontent.com/${user}/${ids.warehouse}/raw/warehouse.lua`;
 
-// 2. Build with the URL in it, and upload.
-process.env.WAREHOUSE_SOURCE = url;
-const { appver, packed, BUILD } = require(path.join(__dirname, "build.cjs"));
-fs.writeFileSync(FILE, packed);
-const build = BUILD, sum = appver(packed);
+// 2. Build (minified) with the URL in it, and upload.
+const { build, writeDist } = require(path.join(__dirname, "build.cjs"));
+const manifest = writeDist(build({ minify: true, source: url }), true);
 gh(["gist", "edit", ids.warehouse, "-f", "warehouse.lua", FILE]);
 console.log("uploaded warehouse.lua to gist " + ids.warehouse);
 
-// 3. The manifest next to it.
-const manifest = { warehouse: { build, sum, url }, publishedAt: new Date().toISOString() };
+// 3. The manifest next to it, with where the file is.
+manifest.warehouse.url = url;
+manifest.publishedAt = new Date().toISOString();
 const mpath = path.join(__dirname, "dist", "manifest.json");
 fs.writeFileSync(mpath, JSON.stringify(manifest, null, 2) + "\n");
 const has = gh(["gist", "view", ids.warehouse, "--files"]).split(/\r?\n/).includes("manifest.json");
 if (has) gh(["gist", "edit", ids.warehouse, "-f", "manifest.json", mpath]); else gh(["gist", "edit", ids.warehouse, "-a", mpath]);
-console.log("manifest.json " + (has ? "updated" : "added") + " (build " + build + ", file " + sum + ")");
+console.log("manifest.json " + (has ? "updated" : "added") + " (build " + manifest.warehouse.build + ", file " + manifest.warehouse.sum + ")");
 console.log("");
 console.log("In game:");
 console.log(`  wget run ${url}`);

@@ -2,7 +2,7 @@
 // flags Lua 5.3-only operators that CC:Tweaked (Lua 5.2) rejects.
 const fs = require("fs");
 const path = require("path");
-const fengari = require("F:/cc-tweaked/cc-control-panel/node_modules/fengari");
+const fengari = require("fengari");
 const { lua, lauxlib, to_luastring } = fengari;
 
 function check52(file, src) {

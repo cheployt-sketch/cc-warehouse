@@ -18,7 +18,7 @@ os = { getComputerID = function() return 17 end }
 package.loaded["lib.secure"] = {}
 package.loaded["lib.util"] = { shortName = function(s) return s end, readTable = function() end, writeTable = function() end }
 package.loaded["craft.recipes"] = { OUTPUT_SLOT = 16 }
-local W = dofile("src/craft/worker.lua")
+local W = dofile((__src or "src") .. "/craft/worker.lua")
 local function say(...) end
 local LOG = { [1] = { name = "minecraft:oak_log", count = 1 } }
 local cases = {

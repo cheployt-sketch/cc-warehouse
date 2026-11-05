@@ -1,4 +1,4 @@
-# files install.lua downloads into /warehouse
+# the warehouse folder: what build.cjs packs into warehouse.lua and installs into /warehouse
 api.lua
 ccryptolib/aead.lua
 ccryptolib/blake3.lua

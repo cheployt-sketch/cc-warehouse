@@ -15,7 +15,6 @@
 
 local util = require("lib.util")
 local config = require("lib.config")
-local category = require("lib.category")
 local UI = require("lib.ui")
 local Uses = require("lib.uses")
 local Folders = require("lib.folders")

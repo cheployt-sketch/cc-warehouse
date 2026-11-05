@@ -7,5 +7,10 @@
     "check": "node test/check.cjs",
     "test": "node test/manifest.cjs && node test/check.cjs && node test/run.cjs",
     "manifest": "node test/manifest.cjs"
+  },
+  "devDependencies": {
+    "fengari": "^0.1.5",
+    "luamin": "^1.0.4",
+    "luaparse": "^0.3.1"
   }
 }
